@@ -857,38 +857,38 @@ int edges[12][2] = {
   {0, 4}, {1, 5}, {2, 6}, {3, 7}
 };
 // Assuming you already have a 64x64 texture (uint16_t or int16_t)
-void drawTexturedFace(float projected[4][2], uint16_t texture[64][64]) {
-    // Define the four corners of the face on screen
+void drawTexturedFace(float projected[4][2], const uint16_t* texture) {
+    // Define the four corners of the face on the screen
     float x0 = projected[0][0], y0 = projected[0][1];
     float x1 = projected[1][0], y1 = projected[1][1];
     float x2 = projected[2][0], y2 = projected[2][1];
     float x3 = projected[3][0], y3 = projected[3][1];
 
-    // Loop through each pixel in the texture (64x64 grid)
-    tft.startWrite(); // Start SPI transaction
-   
+    // Start SPI transaction
+    tft.startWrite();
+
+    // Loop through each pixel in the 64x64 texture
     for (int ty = 0; ty < 64; ty++) {
         for (int tx = 0; tx < 64; tx++) {
             // Calculate the interpolation factor for the texture
             float u = tx / 63.0f;  // Normalize tx to [0, 1]
             float v = ty / 63.0f;  // Normalize ty to [0, 1]
 
-            // Interpolate the position on the screen using the texture coordinates (u, v)
+            // Interpolate the position on the screen using texture coordinates (u, v)
             float x = (1 - u) * ((1 - v) * x0 + v * x3) + u * ((1 - v) * x1 + v * x2);
             float y = (1 - u) * ((1 - v) * y0 + v * y3) + u * ((1 - v) * y1 + v * y2);
 
-            // Get the color from the texture
-            uint16_t color = texture[ty][tx];
+            // Access the color from the texture in PROGMEM using pointer arithmetic
+            uint16_t color = pgm_read_word(&texture[ty * 64 + tx]);
 
             // Draw the pixel at the interpolated screen position
-            // Use rounding to get integer coordinates
             tft.drawPixel((int)x, (int)y, color);
         }
     }
-     tft.endWrite(); //
+
+    // End SPI transaction
+    tft.endWrite();
 }
-
-
 
 // Helper function to draw a pixel with intensity (0.0 to 1.0)
 void drawPixelWithIntensity(int x, int y, float intensity, uint16_t color) {
@@ -1035,7 +1035,7 @@ void drawCube() {
         };
 
         // Draw the textured face
-        drawTexturedFace(face, textureData); // Pass the texture data here
+        drawTexturedFace(face, textureData[0]); // Pass the texture data here
 
         // Optional: Draw the edges of the cube for better visualization
         if (antiAliasedMode) {
@@ -1074,3 +1074,24 @@ void _3DEngine() {
     drawCube();
     }
 }
+
+void draw_add()
+{
+  if(!entered)
+  {
+    entered = 1;
+    disable_all_spi_devices();
+    tft.setRotation(0);
+    tft.fillScreen(TFT_BLUE);
+     tft.setCursor(30, 6);       
+     tft.println("link to git page");
+      tft.startWrite(); 
+    for (int y = 0; y < 128; y++) {
+        for (int x = 0; x < 128; x++) {
+            tft.drawPixel(0 + x, 16 + y, git[y][x]);
+        }
+    }
+     tft.endWrite();
+  }
+}
+  

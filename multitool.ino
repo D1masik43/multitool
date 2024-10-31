@@ -289,6 +289,9 @@ void setup() {
      case STATE_BRAIN_ROOT: 
     _3DEngine();
     break;
+     case STATE_ADD:
+    draw_add();
+    break;
   }  
    
 }
