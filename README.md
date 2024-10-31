@@ -8,5 +8,9 @@ generally entire project is a collection of different already created be someone
 
 project is still under development but here is some images of UI:
 
-![App Menu](https://github.com/D1masik43/multitool/blob/images/app%20menu.jpg)  
+![App Menu](https://github.com/D1masik43/multitool/blob/images/app%20menu.jpg)  <br>
+![NRF Scanner](https://github.com/D1masik43/multitool/blob/images/nrf%20scanner.jpg) <br>
+for more look at Images branch
+
+
 
