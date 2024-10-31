@@ -8,5 +8,5 @@ generally entire project is a collection of different already created be someone
 
 project is still under development but here is some images of UI:
 
-![App Menu]([app menu.jpg](https://github.com/D1masik43/multitool/blob/images/app%20menu.jpg))  
+![App Menu](https://github.com/D1masik43/multitool/blob/images/app%20menu.jpg)  
 
