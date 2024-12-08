@@ -28,6 +28,8 @@ enum AppState {
   STATE_CALENDAR,
   STATE_CLOCK,
   STATE_BRAIN_ROOT,
+  SUBSTATE_TETRIS,
+  SUBSTATE_3DENGINE,
   STATE_NULL,// -->
   SUBSTATE_NRF_SCANNER,
   SUBSTATE_BLUETOOTH_AMPLIFIER,
@@ -45,7 +47,10 @@ AppState blueToothaArray[2] = {
     SUBSTATE_NRF_SCANNER,
     SUBSTATE_BLUETOOTH_AMPLIFIER,
 };
-
+AppState BrainrootArray[2] = {
+    SUBSTATE_3DENGINE,
+    SUBSTATE_TETRIS,
+};
 float dividerAffect = 1.319865;
 int battery_samples = 8;
 

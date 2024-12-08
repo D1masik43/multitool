@@ -20,7 +20,8 @@
 #include <SPI.h>
 #include <TFT_eSPI.h>
  #include <math.h>
- 
+ #include <QMC5883LCompass.h>
+ QMC5883LCompass compass;
 BluetoothA2DPSink a2dp_sink;
 
 
@@ -195,7 +196,44 @@ void check_beep_stop()
     isBeeping = false;           
    }
 }
+unsigned long compStartTime ;
+void draw_compass(){
+ 
+  int azimuth;
+  byte bearing;
+  char direction[4];
 
+  compass.read();
+  azimuth = compass.getAzimuth();
+  bearing = compass.getBearing(azimuth);
+  compass.getDirection(direction, azimuth);
+  direction[3] = '\0';
+
+ 
+  tft.setTextSize(3);
+  tft.setTextColor(TFT_WHITE);
+  tft.setCursor(50,120);
+  tft.println(direction);
+  tft.setCursor(50,100);
+  tft.setTextSize(1);
+  tft.println(F("Direction: "));
+
+  int radius = 23;
+  int centerX = 25;
+  int centerY = 120;
+  if (millis() - compStartTime >= 100) {
+  tft.fillRect(50,120,78,21,TFT_BLUE); 
+  compStartTime = millis();
+  }
+  tft.fillCircle(centerX, centerY, radius, TFT_BLACK);
+  tft.drawCircle(centerX, centerY, radius, TFT_WHITE);
+
+  float angle = azimuth;
+  float angleRad = angle * PI / 180 + PI;
+  int endX = centerX + radius * cos(angleRad);
+  int endY = centerY - radius * sin(angleRad);
+  tft.drawLine(centerX, centerY, endX, endY, TFT_RED);
+}
 void draw_environment(){ 
 
   disable_all_spi_devices();
@@ -219,8 +257,7 @@ void draw_environment(){
   tft.setCursor(0, 66);       
   tft.println("Pressure: " + String(pressure) + " mmHg");
   tft.setCursor(0, 86);       
-  tft.println("Altitude: " + String(altitude) + " m"); 
-  
+  tft.println("Altitude: " + String(altitude) + " m");                                         
 }
 
 void beep_start()
@@ -587,6 +624,10 @@ void draw_menu()
 
 int app_X = 0;
 int app_Y = 0;
+int bluapp_X = 0;
+int bluapp_Y = 0;
+int braapp_X = 0;
+int braapp_Y = 0;
 
 bool mode = true;
 
@@ -612,7 +653,9 @@ void draw_sub_menu()
         }
       }
       tft.drawRect(app_Y*32+8*app_Y+7, app_X*32+15+8*app_X+16,34 ,34, TFT_RED);   
-      tft.drawRect(app_Y*32+8*app_Y+6, app_X*32+15+8*app_X+15,36 ,36, TFT_RED);     
+      tft.drawRect(app_Y*32+8*app_Y+6, app_X*32+15+8*app_X+15,36 ,36, TFT_RED); 
+
+      tft.drawRect(2, 32,2 ,52, 0x632c);    
     }
     else
     {
@@ -625,6 +668,8 @@ void draw_sub_menu()
       }
       tft.drawRect(app_Y*32+8*app_Y+7, (app_X-1)*32+15+8*(app_X-1)+16,34 ,34, TFT_RED);  
       tft.drawRect(app_Y*32+8*app_Y+6, (app_X-1)*32+15+8*(app_X-1)+15,36 ,36, TFT_RED);   
+
+      tft.drawRect(2, 92,2 ,52, 0x632c);   
     }
   }
 }
@@ -657,6 +702,8 @@ const char* appStateToString(AppState state) {
     switch (state) {
         case SUBSTATE_NRF_SCANNER: return "NRF Scanner";
         case SUBSTATE_BLUETOOTH_AMPLIFIER: return "Bluetooth Amplifier";
+         case SUBSTATE_3DENGINE: return "Simple 3D Engine®r";
+        case SUBSTATE_TETRIS: return "Tetris";
         default: return "Unknown";
     }
 }
@@ -675,7 +722,7 @@ void draw_bluetooth_submenu() {
         // Start drawing Bluetooth submenu options
         for (int i = 0; i < sizeof(blueToothaArray) / sizeof(blueToothaArray[0]); i++) {
             tft.setCursor(0, i * 10 + 16);
-            if (i == app_X) {
+            if (i == bluapp_X) {
                 tft.print("> ");  // Highlight selected item
             } else {
                 tft.print("");  // Remove highlight for unselected items
@@ -685,6 +732,8 @@ void draw_bluetooth_submenu() {
         disable_all_spi_devices();
     }
 }
+
+
 int currentFileIndex = 0;   // Track the current file index
 int filesOnScreen = 5;      // Number of files to display on the screen at once
 String fileList[MAX_FILES]; // Array to store file names
@@ -692,6 +741,122 @@ int fileCount = 0;
 int selectedFileIndex = 0;  // Track the selected file index for highlighting
 String currentFileName;  // To hold the currently selected file's name
 int currentLineIndex = 0;  // To track where you are in the file
+
+uint16_t read16(File &file) {
+  uint16_t result = file.read();
+  result |= file.read() << 8;
+  return result;
+}
+
+// Function to read 4 bytes (unsigned) from file
+uint32_t read32(File &file) {
+  uint32_t result = file.read();
+  result |= file.read() << 8;
+  result |= file.read() << 16;
+  result |= file.read() << 24;
+  return result;
+}
+
+void displayImage(String fileName) {
+  File file = SD.open(fileName);
+  if (!file) {
+    Serial.println("Error opening image file");
+    return;
+  }
+
+  // Prepare for BMP image display
+  Serial.println("Displaying BMP image...");
+
+  // Check if the file is a valid BMP file
+  if (fileName.endsWith(".bmp")) {
+    // Read BMP header
+    uint16_t bfType = read16(file);
+    if (bfType != 0x4D42) {  // 'BM' in little-endian
+      Serial.println("Not a valid BMP file");
+      file.close();
+      return;
+    }
+
+    // Skip BMP file header
+    file.seek(18);  // Skip to width/height
+    uint32_t width = read32(file);
+    uint32_t height = read32(file);
+    uint16_t planes = read16(file);
+    uint16_t bitCount = read16(file);
+    uint32_t compression = read32(file);
+    
+    // We assume 24-bit uncompressed BMP
+    if (bitCount != 24 || compression != 0) {
+      Serial.println("Only supports uncompressed 24-bit BMP images");
+      file.close();
+      return;
+    }
+
+    // Skip additional header info
+    file.seek(54);
+
+    // Prepare to draw image
+    tft.setRotation(0);  // Set orientation
+    tft.fillScreen(TFT_BLACK);  // Clear screen
+
+    // Get screen dimensions
+    uint32_t screenWidth = tft.width();
+    uint32_t screenHeight = tft.height();
+
+    // Check if the image is smaller or larger than the screen
+    if (width <= screenWidth && height <= screenHeight) {
+      // Image is smaller than the screen, no resizing
+      // Just center it without scaling
+      int offsetX = (screenWidth - width) / 2;
+      int offsetY = (screenHeight - height) / 2;
+
+      // Start drawing without scaling
+      int padding = (4 - (width * 3) % 4) % 4; // BMP row padding
+      for (int y = height - 1; y >= 0; y--) {  // BMP images are stored upside down
+        for (int x = 0; x < width; x++) {
+          // Read RGB values
+          uint8_t b = file.read();  // Blue component
+          uint8_t g = file.read();  // Green component
+          uint8_t r = file.read();  // Red component
+
+          // Calculate position to center image
+          int displayX = x + offsetX;
+          int displayY = (height - y - 1) + offsetY;  // Flip Y axis
+
+          // Avoid drawing outside the screen bounds
+          if (displayX < screenWidth && displayY < screenHeight) {
+            uint32_t color = tft.color565(r, g, b);  // Convert to TFT color
+            tft.drawPixel(displayX, displayY, color);  // Draw pixel
+          }
+        }
+        file.seek(file.position() + padding);  // Skip padding at the end of each row
+      }
+    } else {
+      // Image is larger than the screen, just display it without resizing
+      int padding = (4 - (width * 3) % 4) % 4; // BMP row padding
+      for (int y = height - 1; y >= 0; y--) {  // BMP images are stored upside down
+        for (int x = 0; x < width; x++) {
+          // Read RGB values
+          uint8_t b = file.read();  // Blue component
+          uint8_t g = file.read();  // Green component
+          uint8_t r = file.read();  // Red component
+
+          // Display the pixel in its original position
+          if (x < screenWidth && (height - y - 1) < screenHeight) {
+            uint32_t color = tft.color565(r, g, b);  // Convert to TFT color
+            tft.drawPixel(x, (height - y - 1), color);  // Draw pixel
+          }
+        }
+        file.seek(file.position() + padding);  // Skip padding at the end of each row
+      }
+    }
+
+    file.close();
+  } else {
+    Serial.println("The file is not a BMP image");
+  }
+}
+
 
 
 void displayFileContent(String fileName) {
@@ -754,6 +919,11 @@ void handleFileSelection() {
     currentFileName = fileName;  // Store the selected file's name
     displayFileContent(currentFileName);  // Display the file content
   }
+  else if (fileName.endsWith(".bmp"))
+  {
+     currentFileName = fileName; 
+     displayImage(currentFileName);
+  }
   else  dispalyError();
   }
 }
@@ -794,14 +964,41 @@ void displayFiles() {
   }
 
 }
+void dispalySD_OPEN_Error(String err)
+{
+ disable_all_spi_devices() ;
+   tft.fillScreen(TFT_BLACK);
+    tft.setTextColor(TFT_RED, TFT_BLACK);  // Highlight color (adjust as needed)
+      tft.print(err);
+}
 
 void draw_files() {
   if (entered == 0) {
     entered = 1;
     disable_all_spi_devices();
+
+    #ifdef REASSIGN_PINS
+  
+  if (!SD.begin(SD_CS)) {
+#else
+  if (!SD.begin()) {
+#endif
+    Serial.println("Card Mount Failed");
+     dispalySD_OPEN_Error("Card Mount Failed");
+    return;
+  }
+  uint8_t cardType = SD.cardType();
+
+  if (cardType == CARD_NONE) {
+    Serial.println("No SD card attached");
+     dispalySD_OPEN_Error("No SD card attached");
+    return;
+  }
+
     File root = SD.open("/");
     if (!root) {
-      Serial.println("Failed to open directory");
+      Serial.println("Failed to open sd card");
+      dispalySD_OPEN_Error("Failed to open sd card");
       return;
     }
 
@@ -1095,3 +1292,381 @@ void draw_add()
   }
 }
   
+void draw_brainroot() { // Prevent drawing if exit flag is set
+    if (entered == 0) {     // Only execute once when entering the submenu
+        entered = 1;
+        
+        disable_all_spi_devices();
+        tft.setRotation(0);
+        tft.setTextColor(TFT_WHITE);
+        tft.fillScreen(TFT_BLUE);
+        draw_time();
+
+        // Start drawing Bluetooth submenu options
+        for (int i = 0; i < sizeof(BrainrootArray) / sizeof(BrainrootArray[0]); i++) {
+            tft.setCursor(0, i * 10 + 16);
+            if (i == braapp_X) {
+                tft.print("> ");  // Highlight selected item
+            } else {
+                tft.print("");  // Remove highlight for unselected items
+            }
+            tft.println(appStateToString(BrainrootArray[i])); 
+        }
+        disable_all_spi_devices();
+    }
+}
+
+void settings()
+{
+  if(!entered)
+  {
+    entered = 1;
+        disable_all_spi_devices();
+        tft.setRotation(0);
+        tft.setTextColor(TFT_WHITE);
+        tft.fillScreen(TFT_BLACK);
+         tft.setCursor(0, 16);
+        tft.print("buzzer:  ");
+         tft.print(but_buzz_freq);
+  }
+}
+
+
+void checkLines();
+void breakLine(short line);
+bool gameover();
+void gameoverscreen();
+void refresh();
+void drawGrid();
+boolean nextHorizontalCollision(short piece[2][4], int amount);
+boolean nextCollision();
+void generate();
+void drawPiece(short type, short rotation, short x, short y);
+void drawNextPiece();
+void copyPiece(short piece[2][4], short type, short rotation);
+short getMaxRotation(short type);
+boolean canRotate(short rotation);
+void drawLayout();
+short getNumberLength(int n);
+void drawText(const char* text, int x, int y);
+
+
+#define WIDTH 64 // OLED display width, in pixels
+
+#define HEIGHT 128 // OLED display height, in pixels
+
+const char pieces_S_l[2][2][4] = { { {0, 0, 1, 1}, {0, 1, 1, 2} },
+                                   { {0, 1, 1, 2}, {1, 1, 0, 0} } };
+
+const char pieces_S_r[2][2][4] = { { {1, 1, 0, 0}, {0, 1, 1, 2}},
+                                   { {0, 1, 1, 2}, {0, 0, 1, 1} } };
+
+const char pieces_L_l[4][2][4] = { { {0, 0, 0, 1}, {0, 1, 2, 2} },
+                                   { {0, 1, 2, 2}, {1, 1, 1, 0} }, 
+                                   { {0, 1, 1, 1}, {0, 0, 1, 2} },
+                                   { {0, 0, 1, 2}, {1, 0, 0, 0} } };
+
+const char pieces_Sq[1][2][4] = { { {0, 1, 0, 1}, {0, 0, 1, 1} } };
+
+const char pieces_T[4][2][4] =  { { {0, 0, 1, 0}, {0, 1, 1, 2} },
+                                  { {0, 1, 1, 2}, {1, 0, 1, 1} },
+                                  { {1, 0, 1, 1}, {0, 1, 1, 2} },
+                                  { {0, 1, 1, 2}, {0, 0, 1, 0} } };
+
+const char pieces_l[2][2][4] =  { { {0, 1, 2, 3}, {0, 0, 0, 0} },
+                                  { {0, 0, 0, 0}, {0, 1, 2, 3} } };
+
+const short MARGIN_TOP = 19;
+const short MARGIN_LEFT = 3;
+const short SIZE = 5;
+const short TYPES = 6;
+
+word currentType, nextType, rotation;
+short pieceX, pieceY;
+short piece[2][4];
+int interval = 20, score;
+long timer;
+boolean grid[10][18];
+
+int restart = 0;
+int highscore = 0;
+
+void checkLines() {
+  boolean full;
+  for (short y = 17; y >= 0; y--) {
+    full = true;
+    for (short x = 0; x < 10; x++) {
+      full = full && grid[x][y];
+    }
+    if (full) {
+      breakLine(y);
+      y++;
+    }
+  }
+}
+
+
+void breakLine(short line) {
+  for (short y = line; y >= 0; y--) {
+    for (short x = 0; x < 10; x++) {
+      grid[x][y] = grid[x][y - 1];
+    }
+  }
+  for (short x = 0; x < 10; x++) {
+    grid[x][0] = 0;
+  }
+  score += 10;
+}
+
+bool gameover() {
+  boolean go;
+  int t = 0;
+  for (short y = 0; y < 19; y++) {
+    go = false;
+    for (short x = 0; x < 10; x++) {
+      go = go || grid[x][y];
+    }
+    if (go) {
+      t++;
+    }
+  }
+  if (t > 18) return true;
+  return false;
+}
+
+
+void drawGrid() {
+  for (short x = 0; x < 10; x++)
+    for (short y = 0; y < 18; y++)
+      if (grid[x][y])
+        tft.fillRect(MARGIN_LEFT + (SIZE + 1)*x, MARGIN_TOP + (SIZE + 1)*y, SIZE, SIZE, TFT_WHITE);
+}
+
+boolean nextHorizontalCollision(short piece[2][4], int amount) {
+  for (short i = 0; i < 4; i++) {
+    short newX = pieceX + piece[0][i] + amount;
+    if (newX > 9 || newX < 0 || grid[newX][pieceY + piece[1][i]])
+      return true;
+  }
+  return false;
+}
+boolean nextCollision() {
+  for (short i = 0; i < 4; i++) {
+    short y = pieceY + piece[1][i] + 1;
+    short x = pieceX + piece[0][i];
+    if (y > 17 || grid[x][y])
+      return true;
+  }
+  return false;
+}
+
+void generate() {
+  randomSeed(analogRead(0));
+  currentType = nextType;
+  nextType = random (TYPES);
+  if (currentType != 5)
+    pieceX = 4;
+  else
+    pieceX = 3;
+  pieceY = 0;
+  rotation = 0;
+  copyPiece(piece, currentType, rotation);
+}
+
+void drawPiece(short type, short rotation, short x, short y) {
+  for (short i = 0; i < 4; i++)
+    tft.fillRect(MARGIN_LEFT + (SIZE + 1) * (x + piece[0][i]), MARGIN_TOP + (SIZE + 1) * (y + piece[1][i]), SIZE, SIZE, TFT_WHITE);
+}
+
+void drawNextPiece() {
+  short nPiece[2][4];
+  copyPiece(nPiece, nextType, 0);
+  for (short i = 0; i < 4; i++)
+    tft.fillRect(50 + 3 * nPiece[0][i], 4 + 3 * nPiece[1][i], 2, 2, TFT_WHITE);
+}
+
+void copyPiece(short piece[2][4], short type, short rotation) {
+  switch (type) {
+    case 0: //L_l
+      for (short i = 0; i < 4; i++) {
+        piece[0][i] = pieces_L_l[rotation][0][i];
+        piece[1][i] = pieces_L_l[rotation][1][i];
+      }
+      break;
+    case 1: //S_l
+      for (short i = 0; i < 4; i++) {
+        piece[0][i] = pieces_S_l[rotation][0][i];
+        piece[1][i] = pieces_S_l[rotation][1][i];
+      }
+      break;
+    case 2: //S_r
+      for (short i = 0; i < 4; i++) {
+        piece[0][i] = pieces_S_r[rotation][0][i];
+        piece[1][i] = pieces_S_r[rotation][1][i];
+      }
+      break;
+    case 3: //Sq
+      for (short i = 0; i < 4; i++) {
+        piece[0][i] = pieces_Sq[0][0][i];
+        piece[1][i] = pieces_Sq[0][1][i];
+      }
+      break;
+    case 4: //T
+      for (short i = 0; i < 4; i++) {
+        piece[0][i] = pieces_T[rotation][0][i];
+        piece[1][i] = pieces_T[rotation][1][i];
+      }
+      break;
+    case 5: //l
+      for (short i = 0; i < 4; i++) {
+        piece[0][i] = pieces_l[rotation][0][i];
+        piece[1][i] = pieces_l[rotation][1][i];
+      }
+      break;
+  }
+}
+
+short getMaxRotation(short type) {
+  if (type == 1 || type == 2 || type == 5)
+    return 2;
+  else if (type == 0 || type == 4)
+    return 4;
+  else if (type == 3)
+    return 1;
+  else
+    return 0;
+}
+
+boolean canRotate(short rotation) {
+  short piece[2][4];
+  copyPiece(piece, currentType, rotation);
+  return !nextHorizontalCollision(piece, 0);
+}
+void drawText(const char* text, int x, int y) {
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(1);
+  tft.setCursor(x, y);
+  tft.print(text);
+}
+void resetGame() {
+  for (short y = 0; y < 18; y++) {
+    for (short x = 0; x < 10; x++) {
+      grid[x][y] = false;
+    }
+  }
+  highscore = score;
+  score = 0;
+  drawLayout();
+  generate();
+  timer = millis();
+}
+
+
+void drawLayout() {
+  tft.drawLine(0, 15, WIDTH, 15, TFT_WHITE);
+  tft.drawRect(0, 0, WIDTH, HEIGHT, TFT_WHITE);
+  drawNextPiece();
+  char text[6];
+  itoa(score, text, 10);
+  drawText(text,  7, 4);
+}
+
+void gameoverscreen() {
+  tft.fillScreen(TFT_BLACK);
+  drawLayout();
+  drawText("GAMEOVER",  9, 40);
+  drawText("Highscore",  5, 50);
+  char text1[6];
+  itoa(highscore, text1, 10);
+  drawText(text1, 15, 60);
+  drawText("Score",  18, 70);
+  char text2[6];
+  itoa(score, text2, 10);
+  drawText(text2,  15, 80);
+}
+
+void refresh() {
+    tft.fillScreen(TFT_BLACK);
+  drawLayout();
+  drawGrid();
+  drawPiece(currentType, 0, pieceX, pieceY);
+}
+int tetbut = 0;
+int exec = 0;
+void tetrobuttonhandler()
+{
+  if(!exec){
+          switch (tetbut ) {
+          case 4: // Left move
+            if (!nextHorizontalCollision(piece, -1)) {
+              pieceX--;
+              refresh();
+            }
+            break;
+          case 6: // Right move
+            if (!nextHorizontalCollision(piece, 1)) {
+              pieceX++;
+              refresh();
+            }
+            break;
+          case 5: // Rotate
+            if (rotation == getMaxRotation(currentType) - 1 && canRotate(0)) {
+              rotation = 0;
+            } else if (canRotate(rotation + 1)) {
+              rotation++;
+            }
+            copyPiece(piece, currentType, rotation);
+            refresh();
+            break;
+          case 7: // Speed up
+            interval = 20;
+            break;
+          case 2: // Normal speed
+            interval = 400;
+            break;
+          default:
+            break;
+        } 
+        exec = 1;
+  }
+}
+int  tetrisentered = 0;
+void draw_tetris()
+{
+  if (!tetrisentered) {
+    tetrisentered = 1;
+    tft.setRotation(0);
+    tft.fillScreen(TFT_BLACK);
+    tft.drawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, TFT_WHITE);
+    drawText("TETRIS", 40, 20);
+    drawText("GAME", 50, 30);
+    delay(2000);
+    tft.fillScreen(TFT_BLACK);
+
+    randomSeed(analogRead(36));
+    nextType = random(TYPES);
+    drawLayout();
+    generate();
+    timer = millis();
+  }
+
+  if (millis() - timer > interval) {
+    checkLines();
+    refresh();
+    if (nextCollision()) {
+      for (short i = 0; i < 4; i++)
+        grid[pieceX + piece[0][i]][pieceY + piece[1][i]] = 1;
+      generate();
+    } else {
+      pieceY++;
+    }
+    timer = millis();
+  }
+  if (gameover()) {
+    gameoverscreen();
+    delay(2000);
+    resetGame();
+  }
+
+}
+
