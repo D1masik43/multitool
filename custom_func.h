@@ -1,4 +1,5 @@
-
+#include <Audio.h>  
+#include <WiFi.h>  
 #include "SD_func.h"
 #include "pins.h"
 #include "constants.h"
@@ -12,29 +13,29 @@
 #include <TFT_eSPI.h> 
 #include <SPI.h>  
 #include "images.h"
-#include <FS.h>;
-#include <SD.h>; 
 #include <DS3231.h>
 #include <Adafruit_INA219.h>; 
 #include "BluetoothA2DPSink.h"  
 #include <SPI.h>
 #include <TFT_eSPI.h>
- #include <math.h>
- #include <QMC5883LCompass.h>
- QMC5883LCompass compass;
+#include <math.h>
+#include <QMC5883LCompass.h>
+#include "battery.h"
+
+Battery battery;
+QMC5883LCompass compass;
 BluetoothA2DPSink a2dp_sink;
-
-
+Audio* audio = nullptr;  // Pointer to Audio object
 Adafruit_INA219 ina219;
 RTClib RTClib;
 DS3231 myRTC;
 TFT_eSPI tft = TFT_eSPI(); 
 
+void draw_miniUI_One_off();   
+void draw_miniUI();
 
 #define SCREEN_WIDTH  128  // Width of the TFT display
 #define SCREEN_HEIGHT 160  // Height of the TFT display
-
-uint16_t screenData[SCREEN_WIDTH * SCREEN_HEIGHT];
 
 void init_display()
 {
@@ -107,12 +108,13 @@ int ButtonCheck()
      delay(1);
     }
     ButtonVal = ButtonVal / button_samples;
-  for(int i = 0; i <= 21; i++)
+  for(int i = 0; i <= 6; i++)
   {
     
     if(ButtonVal >= Button[i][1] && ButtonVal <= Button[i][2])
     {
-     return Button[i][0] ;     
+      //Serial.println(ButtonVal);
+     return Button[i][0] ;          
     }
     
   }
@@ -124,7 +126,7 @@ const unsigned long debounceDelay = 50;
 
 int handle_buttons() {
   int current_button_value = ButtonCheck();
-
+ 
   if (current_button_value != last_button_value) {
     lastDebounceTime = millis();
   }
@@ -152,7 +154,7 @@ void draw_boot_line(int perc)
 void set_pins()
 {
    pinMode(BUT_PIN, INPUT);
-   pinMode(BAT_PIN, INPUT);
+   pinMode(BACKL_PIN, OUTPUT);
    pinMode(BUZ_PIN, OUTPUT);
    pinMode(LED_PIN, OUTPUT);
 }
@@ -167,7 +169,7 @@ AppState  previousState=  STATE_MAIN_MENU;
 
 
 
-void drawImage(uint16_t image[32][32], int startX, int startY) {
+void drawImage(const uint16_t image[32][32], int startX, int startY) {
     for (int y = 0; y < 32; y++) {
         for (int x = 0; x < 32; x++) {
             tft.drawPixel(startX + x, startY + y, image[y][x]);
@@ -238,16 +240,12 @@ void draw_environment(){
 
   disable_all_spi_devices();
   tft.setRotation(0);
-  entered = 0;
-  tft.fillScreen(TFT_BLUE);    
+  tft.fillScreen(TFT_BLUE);
+  draw_miniUI_One_off();   
   pressure = bmp.readPressure() / 100.0F * 0.750062;  
-  check_beep_stop();   
   temperature = aht20.getTemperature();
-  check_beep_stop(); 
   humidity = aht20.getHumidity();
-  check_beep_stop(); 
   altitude = bmp.readAltitude(1013.25);
-  check_beep_stop(); 
   tft.setTextSize(1);
   tft.setTextColor(TFT_WHITE);
   tft.setCursor(0, 26);
@@ -260,6 +258,23 @@ void draw_environment(){
   tft.println("Altitude: " + String(altitude) + " m");                                         
 }
 
+void draw_environment_wrapper()
+{  
+  draw_miniUI();
+  if(entered==0) 
+  {
+     draw_environment();
+     draw_compass();
+     entered = 1;
+  }
+  draw_compass();
+  unsigned long currentMillis = millis();
+   if (currentMillis  - envStartTime > env_upd_Duration) {
+   envStartTime = currentMillis ; // Reset the timer
+   draw_environment();
+   draw_compass();  
+  }
+}
 void beep_start()
 {
         tone(BUZ_PIN,but_buzz_freq);   
@@ -267,91 +282,76 @@ void beep_start()
         beepStartTime = millis(); 
 }
 
-float getBatteryPercentage(float voltage) {
-    // Define the discharge curve table (you may need to adjust these values)
-    const float voltageLevels[] = {4.20, 4.00, 3.85, 3.70, 3.50, 3.30, 3.20, 3.00};
-    const int percentages[] = {100, 85, 70, 50, 25, 10, 5, 0};
-
-    // Find where the voltage falls in the table
-    int i;
-    for (i = 0; i < 7; i++) {
-        if (voltage >= voltageLevels[i]) {
-            break;
-        }
-    }
-
-    // Linear interpolation between the two closest points
-    if (i == 0) {
-        return 100.0; // Over 100% or full charge
-    } else if (i == 7) {
-        return 0.0; // Below 0% or empty
-    } else {
-        float v1 = voltageLevels[i];
-        float v2 = voltageLevels[i - 1];
-        int p1 = percentages[i];
-        int p2 = percentages[i - 1];
-
-        // Interpolate percentage
-        return p1 + (voltage - v1) * (p2 - p1) / (v2 - v1);
-    }
-}
-
-void draw_battery(){
+bool bat_updated = 0;
+void battery_handler()
+{
   float shuntVoltage = ina219.getShuntVoltage_mV();
   float busVoltage = ina219.getBusVoltage_V();
   float current_mA = ina219.getCurrent_mA();
   float power_mW = ina219.getPower_mW();
   float loadVoltage = busVoltage + (shuntVoltage / 1000);
-  float batteryPercentage = getBatteryPercentage(busVoltage);
+  float temperature = aht20.getTemperature();
+  battery.updateBattery(loadVoltage,current_mA,power_mW,temperature);
+  bat_updated = 1;
+}
 
+void draw_battery(){
+  draw_miniUI();
   disable_all_spi_devices();
-  tft.fillScreen(TFT_BLACK);
+  tft.fillRect(0,16,128,144,TFT_BLACK);
   // Set text color and size
   tft.setTextColor(TFT_WHITE);
   tft.setTextSize(1);
 
 
-  tft.setCursor(1, 5);
+  tft.setCursor(1, 16);
   tft.print("Current: ");
-  tft.print(current_mA);
+  tft.print(battery.getCurrent());
   tft.println(" mA");
 
-  tft.setCursor(1, 20);
+  tft.setCursor(1, 32);
   tft.print("Power: ");
-  tft.print(power_mW);
+  tft.print(battery.getPower());
   tft.println(" mW");
 
-  tft.setCursor(1, 35);
+  tft.setCursor(1, 48);
   tft.print("Load Voltage: ");
-  tft.print(loadVoltage);
+  tft.print(battery.getVoltage());
   tft.println(" V");
-  
-  int sum = 0;       
-  for (int i = 0; i < battery_samples; i++) {
-    sum += analogRead(BAT_PIN);
-    delay(1);
-  }         
-  float v  = sum / battery_samples;
-  v = (v * 3.3) / 4095.0;
-  v = v * dividerAffect;      
+
  
-  tft.setCursor(1, 50);
-  tft.print("Analog Voltage: ");
-  tft.print(v);
-  tft.println(" V");
- 
-  tft.setCursor(1, 65);
+  tft.setCursor(1, 64);
   tft.print("Percentage: ");
-  tft.print(batteryPercentage);
+  tft.print(battery.getPercentage());
   tft.println(" %");
+
+  float hours = battery.getEstimatedHours();
+  int h = (int)hours;  // Get the whole hours part
+  int m = (int)((hours - h) * 60);  // Convert fractional part to minutes
 
   tft.setCursor(1, 80);
   tft.println("Battery will last for: ");
-  tft.println((batteryPercentage*550/100)/current_mA);
-  tft.println(" H");
+  tft.print(h);
+  tft.print("h ");
+  tft.print(m);
+  tft.println("m");
 
-  delay(10);
 }
+
+void draw_battery_wrapper()
+{
+  if(entered == 0)
+  {
+    draw_battery();
+    entered=1;
+  }
+  if(bat_updated)
+  {
+     draw_battery();
+    bat_updated = 0;
+  }
+}
+
 
 byte year;
 byte month;
@@ -462,8 +462,7 @@ uint16_t getBatteryColor(int percentage) {
 }
 void draw_bat_ico(int x, int y, int width, int height, int percentage) {
     uint16_t color = getBatteryColor(percentage);
-    float current_mA = ina219.getCurrent_mA();
-    if(current_mA<0) color = TFT_BLUE;
+    if(battery.isCharging()) color = TFT_BLUE;
     // Draw the battery outline
     tft.drawRect(x, y, width, height, TFT_WHITE);
     tft.drawRect(x+width, y + 1,1, height - 2 , TFT_WHITE);
@@ -471,17 +470,16 @@ void draw_bat_ico(int x, int y, int width, int height, int percentage) {
     // Fill the battery based on percentage
     int fillWidth = (width - 2) * percentage / 100;
     tft.fillRect(x + 1, y + 1, fillWidth, height - 2, color);
+    tft.setTextColor(TFT_WHITE);
+    tft.setTextSize(0);
+    tft.setCursor(70,4);
+    tft.print(battery.getPercentage());
+    tft.print("%");
 }
 
 void draw_UI_bat()
 {
-  float shuntVoltage = ina219.getShuntVoltage_mV();
-  float busVoltage = ina219.getBusVoltage_V();
-  float loadVoltage = busVoltage + (shuntVoltage / 1000);
-  float batteryPercentage = getBatteryPercentage(busVoltage);
-
-  disable_all_spi_devices();
-  draw_bat_ico(100, 2, 20, 12, batteryPercentage);
+  draw_bat_ico(100, 2, 20, 12, battery.getPercentage());
 }
 
 unsigned long time_previousMillis = 0; // Store the last update time
@@ -489,28 +487,46 @@ const long time_interval = 1000;
 
 void draw_time()
 {
-  disable_all_spi_devices();
-  tft.fillRect(0,0,128,16,tft.color565(102, 0, 255));
   tft.setTextColor(TFT_WHITE); 
   DateTime now = RTClib.now(); 
-  tft.setCursor(5, 3);
+  tft.setCursor(5, 4);
   tft.print(now.hour(), DEC);
   tft.print(':');
   tft.print(now.minute(), DEC);
   tft.print(':');
   tft.print(now.second(), DEC);
 }
+
+
+
 void draw_miniUI()
 {
+    
     unsigned long time_currentMillis = millis();
   
   if (time_currentMillis - time_previousMillis >= time_interval) {
     time_previousMillis = time_currentMillis; // Save the last update time
+    disable_all_spi_devices();
+    tft.fillRect(0,0,128,16,tft.color565(102, 0, 255));
+    draw_time(); // Call the function to draw the time
+    draw_UI_bat();
+   // draw_free_heap();
+  }
+  if(entered == 0){
+    disable_all_spi_devices();
+    tft.fillRect(0,0,128,16,tft.color565(102, 0, 255));
     draw_time(); // Call the function to draw the time
     draw_UI_bat();
   }
 }
 
+void draw_miniUI_One_off()
+{
+    disable_all_spi_devices();
+    tft.fillRect(0,0,128,16,tft.color565(102, 0, 255));
+    draw_time(); // Call the function to draw the time
+    draw_UI_bat();
+}
 
 
 const int num_reps = 128;
@@ -593,84 +609,142 @@ void get_scann()
 
 void draw_menu()
 {      
-
- 
     draw_miniUI();
       if(!entered){
         entered = 1;
+        
+        tft.setRotation(0);
+        disable_all_spi_devices();
+        draw_miniUI_One_off();
+        tft.startWrite(); // Start SPI transaction
+        tft.setAddrWindow(0, 16, 128, 144); // Set full-screen window (128x160)
+
+          for (int y = 16; y < 160; y++)
+          {
+              for (int x = 0; x < 128; x++)
+              {
+                  tft.pushColor(wallpaper[y][x]); // Send each pixel in RGB565
+              }
+          }
+
+          tft.endWrite(); // End SPI transaction
+      // tft.setTextSize(1);
+      //  tft.setRotation(0);
+      // tft.setTextColor(TFT_WHITE); 
       
-       tft.setRotation(0);
-      disable_all_spi_devices();
-       tft.startWrite(); // Start SPI transaction
-        tft.setAddrWindow(0, 0, 128, 160); // Set full-screen window (128x160)
-
-        for (int y = 0; y < 160; y++)
-        {
-            for (int x = 0; x < 128; x++)
-            {
-                tft.pushColor(wallpaper[y][x]); // Send each pixel in RGB565
-            }
-        }
-
-        tft.endWrite(); // End SPI transaction
-     // tft.setTextSize(1);
-    //  tft.setRotation(0);
-     // tft.setTextColor(TFT_WHITE); 
-     
-      //tft.drawString("Main Menu", 40, 80);  
-      draw_time(); 
-      }
+        //tft.drawString("Main Menu", 40, 80);  
+    }
 }
 
 int app_X = 0;
 int app_Y = 0;
+
+int app_Xold = 1;
+int app_Yold = 1;
+
 int bluapp_X = 0;
 int bluapp_Y = 0;
+
 int braapp_X = 0;
 int braapp_Y = 0;
 
 bool mode = true;
+bool redraw = 0;
+bool inMenu = false;
+
+void drawIcos()
+{
+  if(mode)
+      {
+      for(int y = 0;y <3; y++)
+        {
+          for(int x = 0;x <3; x++)
+          { 
+            drawImage(imageArray[y][x], x * 32 + 8 * x + 8, y * 32 + 8 * y + 32);
+          }
+        }
+        tft.drawRect(2, 32,2 ,52, 0x632c);  
+        tft.drawRect(2, 92,2 ,52, TFT_BLUE);  
+      }
+      else
+      {
+
+        for(int y = 0;y <3; y++)
+        {
+          for(int x = 0;x <3; x++)
+          {  
+            drawImage(imageArray[y+1][x], x * 32 + 8 * x + 8, y * 32 + 8 * y + 32);
+          }
+        }
+        tft.drawRect(2, 32,2 ,52, TFT_BLUE); 
+        tft.drawRect(2, 92,2 ,52, 0x632c);  
+      }
+}
+void drawRed()
+{
+  if(mode)
+  {
+    tft.drawRect(app_Y*32+8*app_Y+7, app_X*32+15+8*app_X+16,34 ,34, TFT_RED);   
+    tft.drawRect(app_Y*32+8*app_Y+6, app_X*32+15+8*app_X+15,36 ,36, TFT_RED); 
+  }
+  else
+  {
+    tft.drawRect(app_Y*32+8*app_Y+7, (app_X-1)*32+15+8*(app_X-1)+16,34 ,34, TFT_RED);  
+    tft.drawRect(app_Y*32+8*app_Y+6, (app_X-1)*32+15+8*(app_X-1)+15,36 ,36, TFT_RED);   
+  }
+}
+void drawBlue()
+{
+  if(mode)
+  {
+    tft.drawRect(app_Yold*32+8*app_Yold+7, app_Xold*32+15+8*app_Xold+16,34 ,34, TFT_BLUE);   
+    tft.drawRect(app_Yold*32+8*app_Yold+6, app_Xold*32+15+8*app_Xold+15,36 ,36, TFT_BLUE); 
+  }
+  else
+  {
+    tft.drawRect(app_Yold*32+8*app_Yold+7, (app_Xold-1)*32+15+8*(app_Xold-1)+16,34 ,34, TFT_BLUE);  
+    tft.drawRect(app_Yold*32+8*app_Yold+6, (app_Xold-1)*32+15+8*(app_Xold-1)+15,36 ,36, TFT_BLUE);   
+  }
+}
 
 void draw_sub_menu()
 {
   draw_miniUI();
-  if(!entered){
+  if(entered== 0){
     entered = 1;
-    draw_time(); 
+    
+    if(app_X < 1)
+    {
+     redraw = 1;
+     mode = true;
+    }
+    if(app_X > 2) 
+    {
+      redraw = 1;
+      mode = false;
+    }
+
     disable_all_spi_devices();
     tft.setRotation(0);
     tft.setTextColor(TFT_WHITE); 
-    tft.fillScreen(TFT_BLUE);
-    if(app_X < 1) mode = true;
-     if(app_X > 2) mode = false;
-    if(mode)
+    if(inMenu)
     {
-     for(int y = 0;y <3; y++)
-      {
-        for(int x = 0;x <3; x++)
-        { 
-          drawImage(imageArray[y][x], x * 32 + 8 * x + 8, y * 32 + 8 * y + 32);
-        }
+      if(redraw){
+        drawIcos();
+        redraw = 0;
       }
-      tft.drawRect(app_Y*32+8*app_Y+7, app_X*32+15+8*app_X+16,34 ,34, TFT_RED);   
-      tft.drawRect(app_Y*32+8*app_Y+6, app_X*32+15+8*app_X+15,36 ,36, TFT_RED); 
-
-      tft.drawRect(2, 32,2 ,52, 0x632c);    
+      drawRed();
+      drawBlue();
     }
     else
     {
-      for(int y = 0;y <3; y++)
-      {
-        for(int x = 0;x <3; x++)
-        {  
-          drawImage(imageArray[y+1][x], x * 32 + 8 * x + 8, y * 32 + 8 * y + 32);
-        }
-      }
-      tft.drawRect(app_Y*32+8*app_Y+7, (app_X-1)*32+15+8*(app_X-1)+16,34 ,34, TFT_RED);  
-      tft.drawRect(app_Y*32+8*app_Y+6, (app_X-1)*32+15+8*(app_X-1)+15,36 ,36, TFT_RED);   
-
-      tft.drawRect(2, 92,2 ,52, 0x632c);   
+     tft.fillScreen(TFT_BLUE);
+     draw_miniUI_One_off();
+     drawIcos();
+     drawRed();
+     drawBlue();
     }
+    inMenu = true;
   }
 }
 
@@ -685,6 +759,7 @@ void draw_amplifier_controls()
         .data_out_num = 27, ///Din pin
         .data_in_num = I2S_PIN_NO_CHANGE
     };
+    
     a2dp_sink.set_pin_config(my_pin_config);
     a2dp_sink.start("MyMusic");
          a2dp_sink.set_volume(225);
@@ -709,7 +784,6 @@ const char* appStateToString(AppState state) {
 }
 
 void draw_bluetooth_submenu() {
-    if (shouldExit) return; // Prevent drawing if exit flag is set
     if (entered == 0) {     // Only execute once when entering the submenu
         entered = 1;
         
@@ -717,8 +791,7 @@ void draw_bluetooth_submenu() {
         tft.setRotation(0);
         tft.setTextColor(TFT_WHITE);
         tft.fillScreen(TFT_BLUE);
-        draw_time();
-
+        draw_miniUI_One_off();
         // Start drawing Bluetooth submenu options
         for (int i = 0; i < sizeof(blueToothaArray) / sizeof(blueToothaArray[0]); i++) {
             tft.setCursor(0, i * 10 + 16);
@@ -731,11 +804,12 @@ void draw_bluetooth_submenu() {
         }
         disable_all_spi_devices();
     }
+  draw_miniUI();
 }
 
 
 int currentFileIndex = 0;   // Track the current file index
-int filesOnScreen = 5;      // Number of files to display on the screen at once
+int filesOnScreen = 8;      // Number of files to display on the screen at once
 String fileList[MAX_FILES]; // Array to store file names
 int fileCount = 0;    
 int selectedFileIndex = 0;  // Track the selected file index for highlighting
@@ -906,6 +980,49 @@ void dispalyError()
     tft.setTextColor(TFT_RED, TFT_BLACK);  // Highlight color (adjust as needed)
       tft.print("Cant open file");
 }
+int speaker_volume = 15;
+void initAudio() {
+    if (audio == nullptr) {  // Create only if it doesn’t exist
+        audio = new Audio();
+        audio->setPinout(AMP_BCLK, AMP_LRCLK, AMP_DIN);
+        audio->setVolume(speaker_volume);
+    }
+}
+void deinitAudio() {
+    if (audio != nullptr) {
+        audio->stopSong();
+        delay(30);    
+        delete audio;  // Free memory 
+        audio = nullptr;   
+    }
+}
+void handleAudio() {
+    if (audio != nullptr) {
+       disable_all_spi_devices() ;
+        audio->loop();
+         disable_all_spi_devices() ;
+    }
+}
+
+
+void playmp3(String &fileName) {
+  if (audio == nullptr) {
+    initAudio();
+     disable_all_spi_devices() ;
+    audio->connecttoFS(SD, fileName.c_str());  // Convert String to const char*
+     disable_all_spi_devices() ;
+  }
+  if(audio != nullptr)
+  {
+     disable_all_spi_devices() ;
+    audio->connecttoFS(SD, fileName.c_str());  // Convert String to const char*
+     disable_all_spi_devices() ;
+  }
+}
+
+
+
+
 void handleFileSelection() {
    if (entered == 0) {
     entered = 1;
@@ -923,6 +1040,11 @@ void handleFileSelection() {
   {
      currentFileName = fileName; 
      displayImage(currentFileName);
+  }
+  else if (fileName.endsWith(".mp3"))
+  {
+     currentFileName = fileName; 
+     playmp3(currentFileName);
   }
   else  dispalyError();
   }
@@ -1315,19 +1437,66 @@ void draw_brainroot() { // Prevent drawing if exit flag is set
         disable_all_spi_devices();
     }
 }
+void draw_free_heap()
+{
+  float freeRAM = ESP.getFreeHeap() / 1024.0; // Convert free heap to KB
+  float freePSRAM = ESP.getFreePsram() / 1024.0; // Convert free heap to KB
+  // Use String class to format with 2 decimal places
+  String formattedText = String(freeRAM, 2);
+   String formattedTexta = String(freePSRAM, 2);
+  tft.setTextColor(TFT_WHITE); 
+  tft.setCursor(0,30);
+  tft.print("RAM: ");
+  tft.print(formattedText);
+  tft.print("KB");
+  tft.setTextColor(TFT_WHITE); 
+  tft.setCursor(0,46);
+  tft.print("PSRAM: ");
+  tft.print(formattedTexta);
+  tft.print("KB");
+}
+
+
+int last_but_buzz_freq = 400;
+int Screen_brightness = 100;
+int settings_x = 0;
+
+void setBrightness(int brightness) {
+  brightness = constrain(brightness, 0, 100);
+  int dutyCycle = map(brightness, 0, 100, 0, 225);
+  analogWrite(BACKL_PIN, dutyCycle);
+}
 
 void settings()
 {
-  if(!entered)
+  if(entered== 0)
   {
     entered = 1;
-        disable_all_spi_devices();
-        tft.setRotation(0);
-        tft.setTextColor(TFT_WHITE);
-        tft.fillScreen(TFT_BLACK);
-         tft.setCursor(0, 16);
-        tft.print("buzzer:  ");
-         tft.print(but_buzz_freq);
+    draw_miniUI_One_off();
+    disable_all_spi_devices();
+    tft.setRotation(0);
+    tft.fillRect(0,16,128,144,TFT_BLACK);
+    tft.setCursor(0, 16);
+    tft.setTextColor(TFT_GREEN);
+    if(settings_x == 0)tft.print("> ");
+    tft.setTextColor(TFT_WHITE);
+    tft.print("buzzer:  ");
+    tft.print(but_buzz_freq);
+    draw_free_heap();
+
+    tft.setCursor(0, 62);
+    tft.setTextColor(TFT_GREEN);
+    if(settings_x == 1)tft.print("> ");
+    tft.setTextColor(TFT_WHITE);
+    tft.print("brightness:  ");
+    tft.print(Screen_brightness); 
+
+    tft.setCursor(0, 78);
+    tft.setTextColor(TFT_GREEN);
+    if(settings_x == 2)tft.print("> ");
+    tft.setTextColor(TFT_WHITE);
+    tft.print("volume:  ");
+    tft.print(speaker_volume); 
   }
 }
 
@@ -1669,4 +1838,47 @@ void draw_tetris()
   }
 
 }
-
+int numNetworks = -1;
+bool rescanWIFI = false;
+bool drawWIFI = true;
+void wifi()
+{
+  if (!entered)
+  {
+    entered = 1;
+    WiFi.mode(WIFI_STA);          // Set Wi-Fi to station mode
+    WiFi.disconnect();           // Disconnect from any previous connection
+     tft.setRotation(3);          // Adjust the display rotation to suit your screen
+    tft.fillScreen(TFT_BLACK);   // Clear the screen with black
+    draw_miniUI_One_off();
+    tft.setTextColor(TFT_WHITE); // Set text color to white
+    tft.setTextSize(1);          // Set text size
+    tft.setCursor(0, 16);         // Start writing from the top left corner
+     tft.println("Wi-Fi Network Analyzer");
+      WiFi.scanNetworks(true); // Start an async scan
+      drawWIFI == true;     
+  }
+  numNetworks = WiFi.scanComplete();
+  if(rescanWIFI) 
+  {
+     WiFi.scanNetworks(true);
+     rescanWIFI = false;
+  }
+  if (numNetworks == 0) {
+    tft.println("No networks found");
+  }
+  else if (numNetworks > 0 && drawWIFI == true){
+     tft.fillScreen(TFT_BLACK);  
+     draw_miniUI_One_off();
+       tft.setCursor(0, 16); 
+    for (int i = 0; i < numNetworks; i++) {
+      tft.print("SSID: ");
+      tft.println(WiFi.SSID(i));
+      tft.print("Signal Strength (RSSI): ");
+      tft.println(WiFi.RSSI(i));
+      tft.println();   
+    }
+    drawWIFI = false;
+    
+  }
+}

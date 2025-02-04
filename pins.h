@@ -19,7 +19,7 @@
 
 #define BUZ_PIN 32
 
-#define BAT_PIN 33
+#define BACKL_PIN 33
 
 #define BUT_PIN 34
 
