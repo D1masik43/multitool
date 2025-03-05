@@ -108,7 +108,8 @@ void buttonTask(void *pvParameters) {
         currentState = STATE_MAIN_MENU;
         shouldExit = 1;
         beep_start();
-       inMenu = false;
+        inMenu = false;
+        stateStack.clear();
       }
 
       if (but == 4) {
@@ -121,12 +122,17 @@ void buttonTask(void *pvParameters) {
           angleX += angle;
         }
         if (currentState == STATE_SETTINGS) {
-          if(settings_x == 0 & but_buzz_freq >=100 ) but_buzz_freq-=100;  
-          if(settings_x == 1 & Screen_brightness >10 ){
+          if(settings_x == 0 && but_buzz_freq >=100 ) but_buzz_freq-=100;  
+          if(settings_x ==1 && Screen_brightness >1 && Screen_brightness <= 10 ){
+          Screen_brightness-=1;  
+          setBrightness(Screen_brightness);
+          }
+          if(settings_x == 1 && Screen_brightness >10 ){
           Screen_brightness-=10;  
           setBrightness(Screen_brightness);
           }
-          if(settings_x == 2 & speaker_volume > 2 ) speaker_volume-=1;  
+
+          if(settings_x == 2 && speaker_volume > 2 ) speaker_volume-=1;  
         }
         beep_start();
       }
@@ -189,8 +195,12 @@ void buttonTask(void *pvParameters) {
           angleX -= angle;
         }
         if (currentState == STATE_SETTINGS) {
-          if(settings_x ==0 & but_buzz_freq <=900 ) but_buzz_freq+=100;  
-          if(settings_x ==1 & Screen_brightness <=90 ){
+          if(settings_x ==0 && but_buzz_freq <=900 ) but_buzz_freq+=100;  
+          if(settings_x ==1 && Screen_brightness <10 && Screen_brightness ){
+          Screen_brightness+=1;  
+          setBrightness(Screen_brightness);
+          }
+          if(settings_x ==1 && Screen_brightness <=90 && Screen_brightness >= 10 ){
              Screen_brightness+=10;  
           setBrightness(Screen_brightness);
           }
@@ -328,6 +338,7 @@ compass.setCalibrationScales(0.71, 7.11, 0.69);
     Serial.println(" KB");
 
     if (psramFound()) {
+        psramInit();
         Serial.print("Free PSRAM: ");
         Serial.print(ESP.getFreePsram()/1024);
         Serial.println(" KB");

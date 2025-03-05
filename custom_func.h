@@ -1,3 +1,4 @@
+#include <TJpg_Decoder.h>
 #include <Audio.h>  
 #include <WiFi.h>  
 #include "SD_func.h"
@@ -14,13 +15,14 @@
 #include <SPI.h>  
 #include "images.h"
 #include <DS3231.h>
-#include <Adafruit_INA219.h>; 
+#include <Adafruit_INA219.h>
 #include "BluetoothA2DPSink.h"  
 #include <SPI.h>
 #include <TFT_eSPI.h>
 #include <math.h>
 #include <QMC5883LCompass.h>
 #include "battery.h"
+#include "esp_heap_caps.h"
 
 Battery battery;
 QMC5883LCompass compass;
@@ -31,11 +33,13 @@ RTClib RTClib;
 DS3231 myRTC;
 TFT_eSPI tft = TFT_eSPI(); 
 
+#define SCREEN_WIDTH  128  // Width of the TFT display
+#define SCREEN_HEIGHT 160  // Height of the TFT display
+
+
 void draw_miniUI_One_off();   
 void draw_miniUI();
 
-#define SCREEN_WIDTH  128  // Width of the TFT display
-#define SCREEN_HEIGHT 160  // Height of the TFT display
 
 void init_display()
 {
@@ -1020,6 +1024,26 @@ void playmp3(String &fileName) {
   }
 }
 
+bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap) {
+  if (y >= tft.height()) return 0; // Stop drawing if out of bounds
+  tft.pushImage(x, y, w, h, bitmap);
+  return 1;
+}
+
+void drawJpg(const char *filename, int x, int y) {
+  File jpgFile = SD.open(filename);
+  if (!jpgFile) {
+    Serial.println("Failed to open JPG file!");
+    return;
+  }
+  
+  Serial.println("Displaying: " + String(filename));
+  TJpgDec.drawSdJpg(x, y, filename);  // Draw JPG from SD
+  
+  jpgFile.close();
+}
+
+
 
 
 
@@ -1045,6 +1069,17 @@ void handleFileSelection() {
   {
      currentFileName = fileName; 
      playmp3(currentFileName);
+  }
+   else if (fileName.endsWith(".m4a"))
+  {
+     currentFileName = fileName; 
+     playmp3(currentFileName);
+  }
+  else if (fileName.endsWith(".jpg")) {  // Add PNG handling
+         currentFileName = fileName;
+          TJpgDec.setJpgScale(1); // 1 = full resolution, 2 = half, 4 = quarter
+          TJpgDec.setCallback(tft_output);
+        drawJpg(currentFileName.c_str(), 0, 0);
   }
   else  dispalyError();
   }
@@ -1148,252 +1183,6 @@ void draw_files() {
   }
 }
 
-
-
-
-// Cube properties
-float angleX = 0.0, angleY = 0.0;
-float cubeSize = 64.0;
-float centerX = 80, centerY = 60;  // Center of display
-bool antiAliasedMode = true; 
-
-// 3D cube vertices
-float vertices[8][3] = {
-  {-1, -1, -1},
-  { 1, -1, -1},
-  { 1,  1, -1},
-  {-1,  1, -1},
-  {-1, -1,  1},
-  { 1, -1,  1},
-  { 1,  1,  1},
-  {-1,  1,  1}
-};
-
-// Lines between vertices
-int edges[12][2] = {
-  {0, 1}, {1, 2}, {2, 3}, {3, 0},
-  {4, 5}, {5, 6}, {6, 7}, {7, 4},
-  {0, 4}, {1, 5}, {2, 6}, {3, 7}
-};
-// Assuming you already have a 64x64 texture (uint16_t or int16_t)
-void drawTexturedFace(float projected[4][2], const uint16_t* texture) {
-    // Define the four corners of the face on the screen
-    float x0 = projected[0][0], y0 = projected[0][1];
-    float x1 = projected[1][0], y1 = projected[1][1];
-    float x2 = projected[2][0], y2 = projected[2][1];
-    float x3 = projected[3][0], y3 = projected[3][1];
-
-    // Start SPI transaction
-    tft.startWrite();
-
-    // Loop through each pixel in the 64x64 texture
-    for (int ty = 0; ty < 64; ty++) {
-        for (int tx = 0; tx < 64; tx++) {
-            // Calculate the interpolation factor for the texture
-            float u = tx / 63.0f;  // Normalize tx to [0, 1]
-            float v = ty / 63.0f;  // Normalize ty to [0, 1]
-
-            // Interpolate the position on the screen using texture coordinates (u, v)
-            float x = (1 - u) * ((1 - v) * x0 + v * x3) + u * ((1 - v) * x1 + v * x2);
-            float y = (1 - u) * ((1 - v) * y0 + v * y3) + u * ((1 - v) * y1 + v * y2);
-
-            // Access the color from the texture in PROGMEM using pointer arithmetic
-            uint16_t color = pgm_read_word(&texture[ty * 64 + tx]);
-
-            // Draw the pixel at the interpolated screen position
-            tft.drawPixel((int)x, (int)y, color);
-        }
-    }
-
-    // End SPI transaction
-    tft.endWrite();
-}
-
-// Helper function to draw a pixel with intensity (0.0 to 1.0)
-void drawPixelWithIntensity(int x, int y, float intensity, uint16_t color) {
-  uint8_t r = ((color >> 11) & 0x1F) * intensity;
-  uint8_t g = ((color >> 5) & 0x3F) * intensity;
-  uint8_t b = (color & 0x1F) * intensity;
-  uint16_t fadedColor = (r << 11) | (g << 5) | b;
-  tft.drawPixel(x, y, fadedColor);
-}
-
-// Draw an anti-aliased line using Wu's line algorithm
-
- void drawAntialiasedLine(int x0, int y0, int x1, int y1, uint16_t color) {
-
-  bool steep = abs(y1 - y0) > abs(x1 - x0);
-  if (steep) {
-    int temp = x0; x0 = y0; y0 = temp;
-    temp = x1; x1 = y1; y1 = temp;
-  }
-  if (x0 > x1) {
-    int temp = x0; x0 = x1; x1 = temp;
-    temp = y0; y0 = y1; y1 = temp;
-  }
-
-  int dx = x1 - x0;
-  int dy = y1 - y0;
-  float gradient = (dx == 0) ? 1 : (float)dy / dx;
-
-  // Start point
-  float xEnd = round(x0);
-  float yEnd = y0 + gradient * (xEnd - x0);
-  float xGap = 1 - (x0 + 0.5 - floor(x0 + 0.5));
-  int xPixel1 = xEnd;
-  int yPixel1 = floor(yEnd);
-
-  if (steep) {
-    drawPixelWithIntensity(yPixel1, xPixel1, (1 - (yEnd - yPixel1)) * xGap, color);
-    drawPixelWithIntensity(yPixel1 + 1, xPixel1, (yEnd - yPixel1) * xGap, color);
-  } else {
-    drawPixelWithIntensity(xPixel1, yPixel1, (1 - (yEnd - yPixel1)) * xGap, color);
-    drawPixelWithIntensity(xPixel1, yPixel1 + 1, (yEnd - yPixel1) * xGap, color);
-  }
-
-  // Main loop
-  float intery = yEnd + gradient;
-  for (int x = xPixel1 + 1; x < x1; x++) {
-    if (steep) {
-      drawPixelWithIntensity(floor(intery), x, 1 - (intery - floor(intery)), color);
-      drawPixelWithIntensity(floor(intery) + 1, x, intery - floor(intery), color);
-    } else {
-      drawPixelWithIntensity(x, floor(intery), 1 - (intery - floor(intery)), color);
-      drawPixelWithIntensity(x, floor(intery) + 1, intery - floor(intery), color);
-    }
-    intery += gradient;
-  }
-
-  // End point
-  xEnd = round(x1);
-  yEnd = y1 + gradient * (xEnd - x1);
-  xGap = x1 + 0.5 - floor(x1 + 0.5);
-  int xPixel2 = xEnd;
-  int yPixel2 = floor(yEnd);
-
-  if (steep) {
-    drawPixelWithIntensity(yPixel2, xPixel2, (1 - (yEnd - yPixel2)) * xGap, color);
-    drawPixelWithIntensity(yPixel2 + 1, xPixel2, (yEnd - yPixel2) * xGap, color);
-  } else {
-    drawPixelWithIntensity(xPixel2, yPixel2, (1 - (yEnd - yPixel2)) * xGap, color);
-    drawPixelWithIntensity(xPixel2, yPixel2 + 1, (yEnd - yPixel2) * xGap, color);
-  }
-}
-
-// Rotate and project vertex
-void rotateAndProject(float *vertex, float *projectedVertex) {
-  float xRotated = vertex[0];
-  float yRotated = cos(angleX) * vertex[1] - sin(angleX) * vertex[2];
-  float zRotated = sin(angleX) * vertex[1] + cos(angleX) * vertex[2];
-
-  float xFinal = cos(angleY) * xRotated + sin(angleY) * zRotated;
-  float yFinal = yRotated;
-  float zFinal = -sin(angleY) * xRotated + cos(angleY) * zRotated;
-
-  float distance = 3;
-  float scale = cubeSize / (zFinal + distance);
-  projectedVertex[0] = centerX + scale * xFinal;
-  projectedVertex[1] = centerY + scale * yFinal;
-  projectedVertex[2] = zFinal;  // Store z for sorting
-}
-
-void drawCube() {
-    float projected[8][3];  // Store x, y, and z for depth sorting
-
-    // Project vertices to 2D space
-    for (int i = 0; i < 8; i++) {
-        rotateAndProject(vertices[i], projected[i]);
-    }
-
-    // Define the faces of the cube (each face is made up of 4 vertices)
-    int faces[6][4] = {
-        {0, 1, 2, 3}, // Front face
-        {4, 5, 6, 7}, // Back face
-        {0, 1, 5, 4}, // Left face
-        {2, 3, 7, 6}, // Right face
-        {0, 3, 7, 4}, // Top face
-        {1, 2, 6, 5}  // Bottom face
-    };
-
-    // Create an array to store the depth of each face
-    float depths[6];
-
-    // Calculate the average depth of each face to determine draw order
-    for (int i = 0; i < 6; i++) {
-        float zSum = 0.0;
-        for (int j = 0; j < 4; j++) {
-            int vertexIdx = faces[i][j];
-            zSum += projected[vertexIdx][2];  // Use transformed z
-        }
-        depths[i] = zSum / 4.0;  // Average depth of the face
-    }
-
-    // Sort faces based on depth (back faces first)
-    for (int i = 0; i < 6; i++) {
-        for (int j = i + 1; j < 6; j++) {
-            if (depths[i] < depths[j]) {  // Swap if i is nearer than j
-                std::swap(depths[i], depths[j]);
-                std::swap(faces[i], faces[j]);
-            }
-        }
-    }
-
-    // Draw each face of the cube in back-to-front order
-     for (int i = 3; i < 6; i++) {  // Only the farthest 3 faces
-        int v0 = faces[i][0];
-        int v1 = faces[i][1];
-        int v2 = faces[i][2];
-        int v3 = faces[i][3];
-
-        // Create an array of projected coordinates for the face
-        float face[4][2] = {
-            {projected[v0][0], projected[v0][1]},
-            {projected[v1][0], projected[v1][1]},
-            {projected[v2][0], projected[v2][1]},
-            {projected[v3][0], projected[v3][1]}
-        };
-
-        // Draw the textured face
-        drawTexturedFace(face, textureData[0]); // Pass the texture data here
-
-        // Optional: Draw the edges of the cube for better visualization
-        if (antiAliasedMode) {
-            drawAntialiasedLine((int)projected[v0][0], (int)projected[v0][1],
-                                (int)projected[v1][0], (int)projected[v1][1], TFT_WHITE);
-            drawAntialiasedLine((int)projected[v1][0], (int)projected[v1][1],
-                                (int)projected[v2][0], (int)projected[v2][1], TFT_WHITE);
-            drawAntialiasedLine((int)projected[v2][0], (int)projected[v2][1],
-                                (int)projected[v3][0], (int)projected[v3][1], TFT_WHITE);
-            drawAntialiasedLine((int)projected[v3][0], (int)projected[v3][1],
-                                (int)projected[v0][0], (int)projected[v0][1], TFT_WHITE);
-        } else {
-            // Draw normal lines for edges
-            tft.drawLine((int)projected[v0][0], (int)projected[v0][1],
-                         (int)projected[v1][0], (int)projected[v1][1], TFT_WHITE);
-            tft.drawLine((int)projected[v1][0], (int)projected[v1][1],
-                         (int)projected[v2][0], (int)projected[v2][1], TFT_WHITE);
-            tft.drawLine((int)projected[v2][0], (int)projected[v2][1],
-                         (int)projected[v3][0], (int)projected[v3][1], TFT_WHITE);
-            tft.drawLine((int)projected[v3][0], (int)projected[v3][1],
-                         (int)projected[v0][0], (int)projected[v0][1], TFT_WHITE);
-        }
-    }
-}
-
-
-
-// Main engine function
-void _3DEngine() {
-  if(entered == 0)
-  {
-  entered = 1;
-    disable_all_spi_devices();
-    tft.setRotation(1);
-    tft.fillScreen(TFT_BLACK);
-    drawCube();
-    }
-}
-
 void draw_add()
 {
   if(!entered)
@@ -1414,16 +1203,15 @@ void draw_add()
   }
 }
   
-void draw_brainroot() { // Prevent drawing if exit flag is set
+void draw_brainroot() {
+    draw_miniUI();
     if (entered == 0) {     // Only execute once when entering the submenu
         entered = 1;
-        
         disable_all_spi_devices();
         tft.setRotation(0);
         tft.setTextColor(TFT_WHITE);
         tft.fillScreen(TFT_BLUE);
-        draw_time();
-
+        draw_miniUI_One_off();
         // Start drawing Bluetooth submenu options
         for (int i = 0; i < sizeof(BrainrootArray) / sizeof(BrainrootArray[0]); i++) {
             tft.setCursor(0, i * 10 + 16);
@@ -1458,7 +1246,7 @@ void draw_free_heap()
 
 
 int last_but_buzz_freq = 400;
-int Screen_brightness = 100;
+int Screen_brightness = 50;
 int settings_x = 0;
 
 void setBrightness(int brightness) {
@@ -1843,6 +1631,7 @@ bool rescanWIFI = false;
 bool drawWIFI = true;
 void wifi()
 {
+  draw_miniUI();
   if (!entered)
   {
     entered = 1;
@@ -1880,5 +1669,564 @@ void wifi()
     }
     drawWIFI = false;
     
+  }
+}
+
+
+
+
+                                       ////// 3D ENGINE //////
+
+
+uint16_t* frameBuffer = nullptr;  // Pointer for dynamic allocation
+
+
+  #define PIXEL_DENSITY 91
+// Cube properties
+float angleX = 0.0, angleY = 0.0;
+float cubeSize = 64.0;
+float centerX = 80, centerY = 60;  // Center of display
+bool antiAliasedMode = true; 
+bool anisotropicFilteringMode = true; 
+bool FPScounterMode = true; 
+bool flashLightMode = true; 
+unsigned long previousfpsMillis = 0;  // To store the last time the FPS was updated
+unsigned long currentfpsMillis = 0;   // Current time
+float frameCount = 0;                // Frame counter
+float fps = 0;                       // Store the FPS value
+
+int lightVec[3] = {0,0,2};
+float maxDist = cubeSize*sqrtf(2)/2.1;
+float lightPower = 2;
+
+// 3D cube vertices
+float vertices[8][3] = {
+  {-1, -1, -1},
+  { 1, -1, -1},
+  { 1,  1, -1},
+  {-1,  1, -1},
+  {-1, -1,  1},
+  { 1, -1,  1},
+  { 1,  1,  1},
+  {-1,  1,  1}
+};
+
+// Lines between vertices
+int edges[12][2] = {
+  {0, 1}, {1, 2}, {2, 3}, {3, 0},
+  {4, 5}, {5, 6}, {6, 7}, {7, 4},
+  {0, 4}, {1, 5}, {2, 6}, {3, 7}
+};
+
+
+ void drawPixelToBuffer(int x, int y, uint16_t color) {
+    if (x >= 0 && x < SCREEN_WIDTH && y >= 0 && y < SCREEN_HEIGHT) {
+        frameBuffer[y * SCREEN_WIDTH + x] = color; // Write color to buffer
+    }
+}
+// Function to blend two colors with intensity
+uint16_t blendColors(uint16_t color1, uint16_t color2, float intensity) {
+  uint8_t r1 = (color1 >> 11) & 0x1F;
+  uint8_t g1 = (color1 >> 5) & 0x3F;
+  uint8_t b1 = color1 & 0x1F;
+
+  uint8_t r2 = (color2 >> 11) & 0x1F;
+  uint8_t g2 = (color2 >> 5) & 0x3F;
+  uint8_t b2 = color2 & 0x1F;
+
+  uint8_t r = r1 * (1 - intensity) + r2 * intensity;
+  uint8_t g = g1 * (1 - intensity) + g2 * intensity;
+  uint8_t b = b1 * (1 - intensity) + b2 * intensity;
+
+  return (r << 11) | (g << 5) | b;
+}
+#define FIXED_POINT_MULT 1024  // Scaling factor for fixed-point arithmetic
+
+void drawTexturedFace(float projected[4][2], const uint16_t* texture) {
+    // Define the four corners of the face on the screen
+    float x0 = projected[0][0], y0 = projected[0][1];
+    float x1 = projected[1][0], y1 = projected[1][1];
+    float x2 = projected[2][0], y2 = projected[2][1];
+    float x3 = projected[3][0], y3 = projected[3][1];
+
+    // Precompute edge interpolation increments (fixed-point)
+    int x0_fp = x0 * FIXED_POINT_MULT;
+    int y0_fp = y0 * FIXED_POINT_MULT;
+    int x1_fp = x1 * FIXED_POINT_MULT;
+    int y1_fp = y1 * FIXED_POINT_MULT;
+    int x2_fp = x2 * FIXED_POINT_MULT;
+    int y2_fp = y2 * FIXED_POINT_MULT;
+    int x3_fp = x3 * FIXED_POINT_MULT;
+    int y3_fp = y3 * FIXED_POINT_MULT;
+
+    int dx0_fp = (x3_fp - x0_fp) / PIXEL_DENSITY;
+    int dy0_fp = (y3_fp - y0_fp) / PIXEL_DENSITY;
+    int dx1_fp = (x2_fp - x1_fp) / PIXEL_DENSITY;
+    int dy1_fp = (y2_fp - y1_fp) / PIXEL_DENSITY;
+
+    // Precompute texture indices for each row and column
+    int texXRow[PIXEL_DENSITY];
+    for (int tx = 0; tx < PIXEL_DENSITY; tx++) {
+        texXRow[tx] = (tx * 64) / PIXEL_DENSITY;
+    }
+
+    for (int ty = 0; ty < PIXEL_DENSITY; ty++) {
+        // Interpolate along the edges (fixed-point)
+        int xLeft_fp = x0_fp + ty * dx0_fp;
+        int yLeft_fp = y0_fp + ty * dy0_fp;
+        int xRight_fp = x1_fp + ty * dx1_fp;
+        int yRight_fp = y1_fp + ty * dy1_fp;
+
+        int dx_fp = (xRight_fp - xLeft_fp) / PIXEL_DENSITY;
+        int dy_fp = (yRight_fp - yLeft_fp) / PIXEL_DENSITY;
+
+        // Precompute texture row index
+        int texY = (ty * 64) / PIXEL_DENSITY;
+
+        for (int tx = 0; tx < PIXEL_DENSITY; tx++) {
+            // Interpolate screen position (fixed-point)
+            int x_fp = xLeft_fp + tx * dx_fp;
+            int y_fp = yLeft_fp + tx * dy_fp;
+
+            // Convert fixed-point back to integer
+            int x = x_fp / FIXED_POINT_MULT;
+            int y = y_fp / FIXED_POINT_MULT;
+
+            // Access the precomputed texture column index
+            int texX = texXRow[tx];
+
+            // Access the color from the texture
+            uint16_t color = texture[texY * 64 + texX];
+            if(flashLightMode)
+            {
+              
+            uint8_t r = (color >> 11) & 0x1F;  // Extract 5-bit red
+            uint8_t g = (color >> 5) & 0x3F;   // Extract 6-bit green
+            uint8_t b = color & 0x1F;          // Extract 5-bit blue
+
+            float distance = sqrtf((x - centerX)*(x - centerX)+(y - centerY)*(y - centerY));
+            float dot = distance/(maxDist);
+            dot = 1-dot;
+            dot *= lightPower;
+            if(dot<0.25f) dot = 0.25f;
+            r = (uint8_t)fminf(r * dot, 31);  // Ensure max value is not exceeded
+            g = (uint8_t)fminf(g * dot, 63);  // Clamp to 255 if the result exceeds
+            b = (uint8_t)fminf(b * dot, 31);
+
+
+
+            uint16_t shadedColor = (r << 11) | (g << 5) | b;
+            color = shadedColor;
+            }
+            // Draw the pixel at the interpolated screen position
+            drawPixelToBuffer(x, y, color);
+        }
+    }
+}
+
+// Helper function to perform bilinear interpolation between four colors
+uint16_t interpolateColor(uint16_t texTL, uint16_t texTR, uint16_t texBL, uint16_t texBR, float fracX, float fracY) {
+    // Extract RGB565 components
+    int rTL = (texTL >> 11) & 0x1F, gTL = (texTL >> 5) & 0x3F, bTL = texTL & 0x1F;
+    int rTR = (texTR >> 11) & 0x1F, gTR = (texTR >> 5) & 0x3F, bTR = texTR & 0x1F;
+    int rBL = (texBL >> 11) & 0x1F, gBL = (texBL >> 5) & 0x3F, bBL = texBL & 0x1F;
+    int rBR = (texBR >> 11) & 0x1F, gBR = (texBR >> 5) & 0x3F, bBR = texBR & 0x1F;
+
+    // Interpolate red, green, and blue channels
+    int rTop = rTL + fracX * (rTR - rTL);
+    int gTop = gTL + fracX * (gTR - gTL);
+    int bTop = bTL + fracX * (bTR - bTL);
+    int rBottom = rBL + fracX * (rBR - rBL);
+    int gBottom = gBL + fracX * (gBR - gBL);
+    int bBottom = bBL + fracX * (bBR - bBL);
+
+    int r = rTop + fracY * (rBottom - rTop);
+    int g = gTop + fracY * (gBottom - gTop);
+    int b = bTop + fracY * (bBottom - bTop);
+
+    // Combine interpolated components into a single RGB565 value
+    return (r << 11) | (g << 5) | b;
+}
+
+
+void drawTexturedFaceWithFiltering(float projected[4][2], const uint16_t* texture) {
+    // Define the four corners of the face on the screen
+    float x0 = projected[0][0], y0 = projected[0][1];
+    float x1 = projected[1][0], y1 = projected[1][1];
+    float x2 = projected[2][0], y2 = projected[2][1];
+    float x3 = projected[3][0], y3 = projected[3][1];
+
+    // Precompute edge interpolation increments (fixed-point)
+    int x0_fp = x0 * FIXED_POINT_MULT;
+    int y0_fp = y0 * FIXED_POINT_MULT;
+    int x1_fp = x1 * FIXED_POINT_MULT;
+    int y1_fp = y1 * FIXED_POINT_MULT;
+    int x2_fp = x2 * FIXED_POINT_MULT;
+    int y2_fp = y2 * FIXED_POINT_MULT;
+    int x3_fp = x3 * FIXED_POINT_MULT;
+    int y3_fp = y3 * FIXED_POINT_MULT;
+
+    int dx0_fp = (x3_fp - x0_fp) / PIXEL_DENSITY;
+    int dy0_fp = (y3_fp - y0_fp) / PIXEL_DENSITY;
+    int dx1_fp = (x2_fp - x1_fp) / PIXEL_DENSITY;
+    int dy1_fp = (y2_fp - y1_fp) / PIXEL_DENSITY;
+
+    for (int ty = 0; ty < PIXEL_DENSITY; ty++) {
+        // Interpolate along the edges (fixed-point)
+        int xLeft_fp = x0_fp + ty * dx0_fp;
+        int yLeft_fp = y0_fp + ty * dy0_fp;
+        int xRight_fp = x1_fp + ty * dx1_fp;
+        int yRight_fp = y1_fp + ty * dy1_fp;
+
+        int dx_fp = (xRight_fp - xLeft_fp) / PIXEL_DENSITY;
+        int dy_fp = (yRight_fp - yLeft_fp) / PIXEL_DENSITY;
+
+        // Precompute texture row index
+        float v = (float)ty / PIXEL_DENSITY; // Normalize ty
+        int texY = v * 64;
+        float fracY = (v * 64) - texY;
+
+        for (int tx = 0; tx < PIXEL_DENSITY; tx++) {
+            // Interpolate screen position (fixed-point)
+            int x_fp = xLeft_fp + tx * dx_fp;
+            int y_fp = yLeft_fp + tx * dy_fp;
+
+            // Convert fixed-point back to integer
+            int x = x_fp / FIXED_POINT_MULT;
+            int y = y_fp / FIXED_POINT_MULT;
+
+            // Calculate texture coordinates
+            float u = (float)tx / PIXEL_DENSITY; // Normalize tx
+            int texX = u * 64;
+            float fracX = (u * 64) - texX;
+
+            // Sample neighboring texels
+            uint16_t texTL = texture[texY * 64 + texX];            // Top-Left
+            uint16_t texTR = texture[texY * 64 + (texX + 1) % 64]; // Top-Right
+            uint16_t texBL = texture[(texY + 1) % 64 * 64 + texX]; // Bottom-Left
+            uint16_t texBR = texture[(texY + 1) % 64 * 64 + (texX + 1) % 64]; // Bottom-Right
+
+            // Perform bilinear interpolation
+            uint16_t color = interpolateColor(texTL, texTR, texBL, texBR, fracX, fracY);
+            if(flashLightMode)
+            {
+              
+            uint8_t r = (color >> 11) & 0x1F;  // Extract 5-bit red
+            uint8_t g = (color >> 5) & 0x3F;   // Extract 6-bit green
+            uint8_t b = color & 0x1F;          // Extract 5-bit blue
+
+            float distance = sqrtf((x - centerX)*(x - centerX)+(y - centerY)*(y - centerY));
+            float dot = distance/(maxDist);
+            dot = 1-dot;
+            dot *= lightPower;
+            if(dot<0.25f) dot = 0.25f;
+            r = (uint8_t)fminf(r * dot, 31);  // Ensure max value is not exceeded
+            g = (uint8_t)fminf(g * dot, 63);  // Clamp to 255 if the result exceeds
+            b = (uint8_t)fminf(b * dot, 31);
+
+
+
+            uint16_t shadedColor = (r << 11) | (g << 5) | b;
+            color = shadedColor;
+            }
+            // Draw the pixel at the interpolated screen position
+            drawPixelToBuffer(x, y, color);
+        }
+    }
+}
+
+
+// Helper function to draw a pixel with intensity (0.0 to 1.0)
+void drawPixelWithIntensity(int x, int y, float intensity, uint16_t color) {
+  if (x < 0 || y < 0 || x >= SCREEN_WIDTH || y >= SCREEN_HEIGHT) return;
+
+  uint16_t existingColor =  frameBuffer[y * SCREEN_WIDTH + x]; // Function to read pixel color from the buffer
+  color = blendColors(existingColor, color, intensity);
+  if(flashLightMode)
+  {
+    
+            uint8_t r = (color >> 11) & 0x1F;  // Extract 5-bit red
+            uint8_t g = (color >> 5) & 0x3F;   // Extract 6-bit green
+            uint8_t b = color & 0x1F;          // Extract 5-bit blue
+
+    float distance = sqrtf((x - centerX)*(x - centerX)+(y - centerY)*(y - centerY));
+            float dot = distance/(maxDist);
+            dot = 1-dot;
+            dot *= lightPower;
+            if(dot<0.25f) dot = 0.25f;
+            r = (color >> 11) & 0x1F;  // Extract 5-bit red
+             g = (color >> 5) & 0x3F;   // Extract 6-bit green
+             b = color & 0x1F;          // Extract 5-bit blue
+
+            r = (uint8_t)fminf(r * dot, 31);  // Ensure max value is not exceeded
+            g = (uint8_t)fminf(g * dot, 63);  // Clamp to 255 if the result exceeds
+            b = (uint8_t)fminf(b * dot, 31);
+
+
+
+            uint16_t shadedColor = (r << 11) | (g << 5) | b;
+            // Draw the pixel at the interpolated screen position
+            color = shadedColor;
+  }
+
+   frameBuffer[y * SCREEN_WIDTH + x]= color; // Function to set pixel color in the buffer
+}
+
+// Draw an anti-aliased line using Wu's line algorithm
+
+void drawAntialiasedLine(int x0, int y0, int x1, int y1, uint16_t color) {
+
+  bool steep = abs(y1 - y0) > abs(x1 - x0);
+  if (steep) {
+    int temp = x0; x0 = y0; y0 = temp;
+    temp = x1; x1 = y1; y1 = temp;
+  }
+  if (x0 > x1) {
+    int temp = x0; x0 = x1; x1 = temp;
+    temp = y0; y0 = y1; y1 = temp;
+  }
+
+  int dx = x1 - x0;
+  int dy = y1 - y0;
+  float gradient = (dx == 0) ? 1 : (float)dy / dx;
+
+  // Start point
+  float xEnd = round(x0);
+  float yEnd = y0 + gradient * (xEnd - x0);
+  float xGap = 1 - (x0 + 0.5 - floor(x0 + 0.5));
+  int xPixel1 = xEnd;
+  int yPixel1 = floor(yEnd);
+
+  if (steep) {
+    drawPixelWithIntensity(yPixel1, xPixel1, (1 - (yEnd - yPixel1)) * xGap, color);
+    drawPixelWithIntensity(yPixel1 + 1, xPixel1, (yEnd - yPixel1) * xGap, color);
+  } else {
+    drawPixelWithIntensity(xPixel1, yPixel1, (1 - (yEnd - yPixel1)) * xGap, color);
+    drawPixelWithIntensity(xPixel1, yPixel1 + 1, (yEnd - yPixel1) * xGap, color);
+  }
+
+  // Main loop
+  float intery = yEnd + gradient;
+  for (int x = xPixel1 + 1; x < x1; x++) {
+    if (steep) {
+      drawPixelWithIntensity(floor(intery), x, 1 - (intery - floor(intery)), color);
+      drawPixelWithIntensity(floor(intery) + 1, x, intery - floor(intery), color);
+    } else {
+      drawPixelWithIntensity(x, floor(intery), 1 - (intery - floor(intery)), color);
+      drawPixelWithIntensity(x, floor(intery) + 1, intery - floor(intery), color);
+    }
+    intery += gradient;
+  }
+
+  // End point
+  xEnd = round(x1);
+  yEnd = y1 + gradient * (xEnd - x1);
+  xGap = x1 + 0.5 - floor(x1 + 0.5);
+  int xPixel2 = xEnd;
+  int yPixel2 = floor(yEnd);
+
+  if (steep) {
+    drawPixelWithIntensity(yPixel2, xPixel2, (1 - (yEnd - yPixel2)) * xGap, color);
+    drawPixelWithIntensity(yPixel2 + 1, xPixel2, (yEnd - yPixel2) * xGap, color);
+  } else {
+    drawPixelWithIntensity(xPixel2, yPixel2, (1 - (yEnd - yPixel2)) * xGap, color);
+    drawPixelWithIntensity(xPixel2, yPixel2 + 1, (yEnd - yPixel2) * xGap, color);
+  }
+}
+
+// Rotate and project vertex
+void rotateAndProject(float *vertex, float *projectedVertex) {
+  float xRotated = vertex[0];
+  float yRotated = cos(angleX) * vertex[1] - sin(angleX) * vertex[2];
+  float zRotated = sin(angleX) * vertex[1] + cos(angleX) * vertex[2];
+
+  float xFinal = cos(angleY) * xRotated + sin(angleY) * zRotated;
+  float yFinal = yRotated;
+  float zFinal = -sin(angleY) * xRotated + cos(angleY) * zRotated;
+
+  float distance = 3;
+  float scale = cubeSize / (zFinal + distance);
+  projectedVertex[0] = centerX + scale * xFinal;
+  projectedVertex[1] = centerY + scale * yFinal;
+  projectedVertex[2] = zFinal;  // Store z for sorting
+}
+void drawCube() {
+    float projected[8][3];  // Store x, y, and z for depth sorting
+
+    // Project vertices to 2D space
+    for (int i = 0; i < 8; i++) {
+        rotateAndProject(vertices[i], projected[i]);
+    }
+
+    // Define the faces of the cube (each face is made up of 4 vertices)
+    int faces[6][4] = {
+        {0, 1, 2, 3}, // Front face
+        {4, 5, 6, 7}, // Back face
+        {0, 1, 5, 4}, // Left face
+        {2, 3, 7, 6}, // Right face
+        {0, 3, 7, 4}, // Top face
+        {1, 2, 6, 5}  // Bottom face
+    };
+
+    // Create an array to store the depth of each face
+    float depths[6];
+
+    // Calculate the average depth of each face to determine draw order
+    for (int i = 0; i < 6; i++) {
+        float zSum = 0.0;
+        for (int j = 0; j < 4; j++) {
+            int vertexIdx = faces[i][j];
+            zSum += projected[vertexIdx][2];  // Use transformed z
+        }
+        depths[i] = zSum / 4.0;  // Average depth of the face
+    }
+
+    // Sort faces based on depth (back faces first)
+    for (int i = 0; i < 6; i++) {
+        for (int j = i + 1; j < 6; j++) {
+            if (depths[i] < depths[j]) {  // Swap if i is nearer than j
+                std::swap(depths[i], depths[j]);
+                std::swap(faces[i], faces[j]);
+            }
+        }
+    }
+
+    // Draw each face of the cube in back-to-front order
+     for (int i = 3; i < 6; i++) {  // Only the farthest 3 faces
+        int v0 = faces[i][0];
+        int v1 = faces[i][1];
+        int v2 = faces[i][2];
+        int v3 = faces[i][3];
+
+        // Create an array of projected coordinates for the face
+        float face[4][2] = {
+            {projected[v0][0], projected[v0][1]},
+            {projected[v1][0], projected[v1][1]},
+            {projected[v2][0], projected[v2][1]},
+            {projected[v3][0], projected[v3][1]}
+        };
+
+        if(anisotropicFilteringMode)
+        {
+          drawTexturedFaceWithFiltering(face, textureData[0]);
+        }
+        else{
+          // Draw the textured face
+          drawTexturedFace(face, textureData[0]); // Pass the texture data here
+        }
+
+        // Optional: Draw the edges of the cube for better visualization
+        if (antiAliasedMode) {
+            drawAntialiasedLine((int)projected[v0][0], (int)projected[v0][1],
+                                (int)projected[v1][0], (int)projected[v1][1], TFT_WHITE);
+            drawAntialiasedLine((int)projected[v1][0], (int)projected[v1][1],
+                                (int)projected[v2][0], (int)projected[v2][1], TFT_WHITE);
+            drawAntialiasedLine((int)projected[v2][0], (int)projected[v2][1],
+                                (int)projected[v3][0], (int)projected[v3][1], TFT_WHITE);
+            drawAntialiasedLine((int)projected[v3][0], (int)projected[v3][1],
+                                (int)projected[v0][0], (int)projected[v0][1], TFT_WHITE);
+        } else {
+            // Draw normal lines for edges
+        // Draw normal lines for edges with x and y inverted
+        tft.drawLine((int)projected[v0][1], (int)projected[v0][0], 
+                    (int)projected[v1][1], (int)projected[v1][0], TFT_WHITE);
+        tft.drawLine((int)projected[v1][1], (int)projected[v1][0], 
+                    (int)projected[v2][1], (int)projected[v2][0], TFT_WHITE);
+        tft.drawLine((int)projected[v2][1], (int)projected[v2][0], 
+                    (int)projected[v3][1], (int)projected[v3][0], TFT_WHITE);
+        tft.drawLine((int)projected[v3][1], (int)projected[v3][0], 
+                    (int)projected[v0][1], (int)projected[v0][0], TFT_WHITE);
+        }
+    }
+}
+
+void allocateBuffer() {
+  if (frameBuffer == nullptr) {
+        frameBuffer = (uint16_t*) ps_malloc(SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(uint16_t));
+        if (frameBuffer == nullptr) {
+          //  Serial.println("Failed to allocate framebuffer in PSRAM!");
+        } else {
+           // Serial.println("Framebuffer allocated in PSRAM.");
+        }
+    }
+}
+
+void freeBuffer() {
+    if (frameBuffer != nullptr) {
+        free(frameBuffer);
+        frameBuffer = nullptr;
+       //Serial.println("Framebuffer freed.");
+    }
+}
+
+
+// Main engine function
+void _3DEngine() {
+
+  if(!FPScounterMode)
+  {
+    if(entered == 0)
+    {
+      entered = 1;
+      allocateBuffer();  // Allocate when needed
+      disable_all_spi_devices();
+      tft.setRotation(1);
+      memset(frameBuffer, 0, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(uint16_t)); // Fill with black
+
+      drawCube();
+      tft.startWrite();
+
+      // Loop through each pixel in the 120x160 buffer
+      for (int ty = 0; ty < 128; ty++) {
+          for (int tx = 0; tx < 160; tx++) {
+              tft.drawPixel(ty, tx,  frameBuffer[ty * SCREEN_WIDTH + tx]);
+          }
+      }
+      tft.endWrite();
+      freeBuffer();
+    }
+  }
+  else{
+
+    currentfpsMillis = millis();  // Get the current time
+
+    // Increment frame counter
+    frameCount++;
+
+    // Calculate FPS every second (or whenever it's time to update FPS)
+    if (currentfpsMillis - previousfpsMillis >= 1000) {
+        // One second has passed, update FPS
+        float timeElapsed = (currentfpsMillis - previousfpsMillis) / 1000.0;  // Convert to seconds
+        fps = frameCount / timeElapsed;  // Calculate FPS
+
+        // Reset frame count and update time
+        frameCount = 0;
+        previousfpsMillis = currentfpsMillis;
+    }
+      allocateBuffer();  // Allocate when needed
+      disable_all_spi_devices();
+      tft.setRotation(0);
+      memset(frameBuffer, 0, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(uint16_t)); // Fill with black
+
+      drawCube();
+      tft.startWrite();
+
+    // Loop through each pixel in the 120x160 buffer
+      for (int ty = 0; ty < 128; ty++) {
+          for (int tx = 0; tx < 160; tx++) {
+              tft.drawPixel(ty, tx,  frameBuffer[ty * SCREEN_WIDTH + tx]);
+          }
+      }
+
+
+    // Draw the FPS value on the top-left corner
+    tft.setTextColor(TFT_WHITE, TFT_BLACK); // White text on black background
+    tft.setTextSize(1);  // Set text size
+    tft.setCursor(0, 0); // Position to top-left
+    tft.print("FPS: ");
+    tft.print(fps);
+
+    tft.endWrite();
+   freeBuffer();
   }
 }
