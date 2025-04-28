@@ -428,5 +428,9 @@ compass.setCalibrationScales(0.71, 7.11, 0.69);
         previousbatMillis = currentMillis;
         battery_handler();  // Call function every 1 sec
     }
+<<<<<<< HEAD
     tft.pushSprite(0, 0);  // Push the sprite to the display at (0,0)
+=======
+    
+>>>>>>> master
 }
