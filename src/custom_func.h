@@ -31,20 +31,10 @@ Audio* audio = nullptr;  // Pointer to Audio object
 Adafruit_INA219 ina219;
 //RTClib RTClib;
 DS3231 myRTC;
-<<<<<<< HEAD
-TFT_eSPI tft_out = TFT_eSPI(); 
-TFT_eSprite tft = TFT_eSprite(&tft_out);  // Create sprite object
-=======
 TFT_eSPI tft = TFT_eSPI(); 
->>>>>>> master
 
 #define SCREEN_WIDTH  128  // Width of the TFT display
 #define SCREEN_HEIGHT 160  // Height of the TFT display
-
-<<<<<<< HEAD
-=======
-uint16_t spriteBuffer[128 * 160];
->>>>>>> master
 
 void draw_miniUI_One_off();   
 void draw_miniUI();
@@ -58,10 +48,6 @@ void init_display()
   digitalWrite(TFT_RST, HIGH);
   tft.fillScreen(TFT_BLACK);
   tft.setRotation(0);
-<<<<<<< HEAD
-  tft.createSprite(SCREEN_WIDTH, SCREEN_HEIGHT); 
-=======
->>>>>>> master
 }
 void init_sd_card()
 {
