@@ -649,6 +649,37 @@ void draw_menu()
         //tft.drawString("Main Menu", 40, 80);  
     }
 }
+int blurIntensity = 2; 
+void drawBlurredPatch(int x0, int y0, int w, int h) {
+  tft.setAddrWindow(x0, y0, w, h);
+  tft.startWrite();
+
+  for (int y = y0; y < y0 + h; y++) {
+    for (int x = x0; x < x0 + w; x++) {
+      int r = 0, g = 0, b = 0, count = 0;
+      for (int dy = -blurIntensity; dy <= blurIntensity; dy++) {
+        for (int dx = -blurIntensity; dx <= blurIntensity; dx++) {
+          int px = x + dx;
+          int py = y + dy;
+          if (px >= 0 && px < 128 && py >= 0 && py < 160) {
+            uint16_t p = wallpaper[py][px];
+            r += (p >> 11) & 0x1F;
+            g += (p >> 5) & 0x3F;
+            b += p & 0x1F;
+            count++;
+          }
+        }
+      }
+      r /= count;
+      g /= count;
+      b /= count;
+      uint16_t blurred = (r << 11) | (g << 5) | b;
+      tft.pushColor(blurred);
+    }
+  }
+
+  tft.endWrite();
+}
 
 int app_X = 0;
 int app_Y = 0;
@@ -677,8 +708,9 @@ void drawIcos()
             drawImage(imageArray[y][x], x * 32 + 8 * x + 8, y * 32 + 8 * y + 32);
           }
         }
-        tft.drawRect(2, 32,2 ,52, 0x632c);  
-        tft.drawRect(2, 92,2 ,52, TFT_BLUE);  
+        tft.drawRect(2, 32,2 ,52, TFT_ORANGE);  
+        drawBlurredPatch(2, 92, 2, 52);
+
       }
       else
       {
@@ -690,8 +722,8 @@ void drawIcos()
             drawImage(imageArray[y+1][x], x * 32 + 8 * x + 8, y * 32 + 8 * y + 32);
           }
         }
-        tft.drawRect(2, 32,2 ,52, TFT_BLUE); 
-        tft.drawRect(2, 92,2 ,52, 0x632c);  
+        drawBlurredPatch(2, 32, 2, 52);
+        tft.drawRect(2, 92,2 ,52, TFT_ORANGE);  
       }
 }
 void drawRed()
@@ -707,19 +739,37 @@ void drawRed()
     tft.drawRect(app_Y*32+8*app_Y+6, (app_X-1)*32+15+8*(app_X-1)+15,36 ,36, TFT_RED);   
   }
 }
+void drawBlurredRectBorders(int x0, int y0, int w, int h) {
+  // Draw top border
+  drawBlurredPatch(x0, y0, w, 1);
+  
+  // Draw bottom border
+  drawBlurredPatch(x0, y0 + h - 1, w, 1);
+  
+  // Draw left border (excluding corners already drawn)
+  if (h > 2) {
+    drawBlurredPatch(x0, y0 + 1, 1, h - 2);
+  }
+  
+  // Draw right border (excluding corners already drawn)
+  if (w > 2) {
+    drawBlurredPatch(x0 + w - 1, y0 + 1, 1, h - 2);
+  }
+}
 void drawBlue()
 {
   if(mode)
   {
-    tft.drawRect(app_Yold*32+8*app_Yold+7, app_Xold*32+15+8*app_Xold+16,34 ,34, TFT_BLUE);   
-    tft.drawRect(app_Yold*32+8*app_Yold+6, app_Xold*32+15+8*app_Xold+15,36 ,36, TFT_BLUE); 
+    drawBlurredRectBorders(app_Yold*32+8*app_Yold+7, app_Xold*32+15+8*app_Xold+16,34 ,34);   
+    drawBlurredRectBorders(app_Yold*32+8*app_Yold+6, app_Xold*32+15+8*app_Xold+15,36 ,36); 
   }
   else
   {
-    tft.drawRect(app_Yold*32+8*app_Yold+7, (app_Xold-1)*32+15+8*(app_Xold-1)+16,34 ,34, TFT_BLUE);  
-    tft.drawRect(app_Yold*32+8*app_Yold+6, (app_Xold-1)*32+15+8*(app_Xold-1)+15,36 ,36, TFT_BLUE);   
+    drawBlurredRectBorders(app_Yold*32+8*app_Yold+7, (app_Xold-1)*32+15+8*(app_Xold-1)+16,34 ,34);  
+    drawBlurredRectBorders(app_Yold*32+8*app_Yold+6, (app_Xold-1)*32+15+8*(app_Xold-1)+15,36 ,36);   
   }
 }
+
 
 void draw_sub_menu()
 {
@@ -752,7 +802,45 @@ void draw_sub_menu()
     }
     else
     {
-     tft.fillScreen(TFT_BLUE);
+     //tft.fillScreen(TFT_BLUE);
+     tft.startWrite();
+     tft.setAddrWindow(0, 16, 128, 144); // From y=16 to y=159
+     
+     for (int y = 16; y < 160; y++) {
+         for (int x = 0; x < 128; x++) {
+             int r = 0, g = 0, b = 0;
+             int count = 0;
+     
+             // Accumulate pixels in a (2*blurIntensity+1)x(2*blurIntensity+1) box
+             for (int dy = -blurIntensity; dy <= blurIntensity; dy++) {
+                 for (int dx = -blurIntensity; dx <= blurIntensity; dx++) {
+                     int px = x + dx;
+                     int py = y + dy;
+     
+                     if (px >= 0 && px < 128 && py >= 0 && py < 160) {
+                         uint16_t p = wallpaper[py][px];
+                         r += (p >> 11) & 0x1F;
+                         g += (p >> 5) & 0x3F;
+                         b += p & 0x1F;
+                         count++;
+                     }
+                 }
+             }
+     
+             // Average the RGB values
+             r /= count;
+             g /= count;
+             b /= count;
+     
+             // Repack into RGB565
+             uint16_t blurred = (r << 11) | (g << 5) | b;
+             tft.pushColor(blurred);
+         }
+     }
+     tft.endWrite();
+     
+     
+     
      draw_miniUI_One_off();
      drawIcos();
      drawRed();
